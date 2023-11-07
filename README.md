@@ -25,8 +25,9 @@ Its main features are:
 #### Reliability
 
 Connections are established even in the presence of:
-  - proxies and load balancers.
-  - personal firewall and antivirus software.
+
+- proxies and load balancers.
+- personal firewall and antivirus software.
 
 For this purpose, it relies on [Engine.IO for golang](https://github.com/zishang520/engine.io), which first establishes a long-polling connection, then tries to upgrade to better transports that are "tested" on the side, like WebSocket. Please see the [Goals](https://github.com/zishang520/engine.io#goals) section for more information.
 
@@ -45,7 +46,6 @@ That functionality is achieved with timers set on both the server and the client
 Any serializable data structures can be emitted, including:
 
 - []byte and io.Reader
-
 
 #### Simple and convenient API
 
@@ -73,13 +73,12 @@ Within each `Namespace`, you can define arbitrary channels, called `Rooms`, that
 
 This is a useful feature to send notifications to a group of users, or to a given user connected on several devices for example.
 
-
 **Note:** Socket.IO is not a WebSocket implementation. Although Socket.IO indeed uses WebSocket as a transport when possible, it adds some metadata to each packet: the packet type, the namespace and the ack id when a message acknowledgement is needed. That is why a WebSocket client will not be able to successfully connect to a Socket.IO server, and a Socket.IO client will not be able to connect to a WebSocket server (like `ws://echo.websocket.org`) either. Please see the protocol specification [here](https://github.com/socketio/socket.io-protocol).
-
 
 ## How to use
 
-The following example attaches socket.io to a plain engine.io *types.CreateServer listening on port `3000`.
+The following example attaches socket.io to a plain engine.io \*types.CreateServer listening on port `3000`.
+
 ```golang
 package main
 
@@ -123,7 +122,9 @@ func main() {
     os.Exit(0)
 }
 ```
+
 other: Use [http.Handler](https://pkg.go.dev/net/http#Handler) interface
+
 ```golang
 package main
 
@@ -170,6 +171,52 @@ func main() {
 
 ```
 
+Gin Route: Use [http.Handler](https://pkg.go.dev/net/http#Handler) interface
+
+```golang
+import (
+	"log"
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+	"github.com/zishang520/socket.io/socket" // 支持 4 以上的其他版本
+)
+
+func cross(ctx *gin.Context) {
+	ctx.Header("Access-Control-Allow-Origin", "http://localhost:3000")
+	ctx.Header("Access-Control-Allow-Headers", "Content-Type,AccessToken,X-CSRF-Token, Authorization")
+	ctx.Header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+	ctx.Header("Access-Control-Expose-Headers", "Content-Length, Access-Control-Allow-Origin, Access-Control-Allow-Headers, Content-Type")
+	ctx.Header("Access-Control-Allow-Credentials", "true")
+	if ctx.Request.Method == "OPTIONS" {
+		ctx.JSON(http.StatusOK, "ok")
+		return
+	}
+	ctx.Next()
+}
+
+func main() {
+	g := gin.Default()
+	io := socket.NewServer(nil, nil)
+	io.Of("/user", nil).On("connection", func(clients ...any) {
+		log.Println("connect")
+		client := clients[0].(*socket.Socket)
+		client.On("ping", func(datas ...any) {
+			log.Println("heart")
+			client.Emit("pong", "pong")
+		})
+		client.On("disconnect", func(...any) {
+			log.Println("disconnect")
+		})
+	})
+	sock := io.ServeHandler(nil)
+	g.Use(cross)
+	g.GET("/socket.io/", gin.WrapH(sock))
+	g.POST("/socket.io/", gin.WrapH(sock))
+	g.Run(":5005")
+}
+```
+
 ## Documentation
 
 Please see the documentation [here](https://pkg.go.dev/github.com/zishang520/socket.io).
@@ -190,9 +237,6 @@ DEBUG=socket.io*
 ```
 make test
 ```
-
-
-
 
 ## License
 
