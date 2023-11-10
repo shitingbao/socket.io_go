@@ -34,8 +34,8 @@ func (r *RedisAdapter) Nsp() socket.NamespaceInterface {
 	return nil
 }
 
-// To be overridden
-func (r *RedisAdapter) Init() {}
+func (r *RedisAdapter) Init() {
+}
 
 // To be overridden
 func (r *RedisAdapter) Close() {}
@@ -183,3 +183,8 @@ func (r *RedisAdapter) computeExceptSids(exceptRooms *types.Set[socket.Room]) *t
 	}
 	return exceptSids
 }
+
+func (r *RedisAdapter) run() {}
+
+// register can join your system
+func (r *RedisAdapter) register() {}

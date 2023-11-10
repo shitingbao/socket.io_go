@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"errors"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/zishang520/engine.io/events"
@@ -11,16 +12,20 @@ import (
 )
 
 type option struct {
-	Address   string
-	Passsword string
-	Db        int
+	Address    string
+	Passsword  string
+	ServerName string
+	Db         int
 }
 
 type Option func(*option)
 
 type RedisAdapter struct {
 	events.EventEmitter
-	rdb *redis.Client
+
+	// serverName should be a unique identifier in the system to guide all nodes to join their own services.
+	serverName string
+	rdb        *redis.Client
 
 	nsp     socket.NamespaceInterface
 	rooms   *types.Map[socket.Room, *types.Set[socket.SocketId]]
@@ -43,12 +48,21 @@ func WithRedisDb(db int) Option {
 	}
 }
 
+func WithRedisServerName(name string) Option {
+	return func(o *option) {
+		o.ServerName = name
+	}
+}
+
 func NewRedisAdapter(opts ...Option) (*RedisAdapter, error) {
 	op := &option{
 		Address: "127.0.0.1:6379",
 	}
 	for _, o := range opts {
 		o(op)
+	}
+	if op.ServerName == "" {
+		return nil, errors.New("you should have a ‘servername’ to distinguish which system other nodes should join")
 	}
 	r := redis.NewClient(&redis.Options{
 		Addr:     op.Address,
@@ -59,6 +73,7 @@ func NewRedisAdapter(opts ...Option) (*RedisAdapter, error) {
 		return nil, err
 	}
 	return &RedisAdapter{
-		rdb: r,
+		rdb:        r,
+		serverName: op.ServerName,
 	}, nil
 }
