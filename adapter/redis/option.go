@@ -26,6 +26,7 @@ type RedisAdapter struct {
 	// serverName should be a unique identifier in the system to guide all nodes to join their own services.
 	serverName string
 	rdb        *redis.Client
+	ctx        context.Context
 
 	nsp     socket.NamespaceInterface
 	rooms   *types.Map[socket.Room, *types.Set[socket.SocketId]]
@@ -74,6 +75,7 @@ func NewRedisAdapter(opts ...Option) (*RedisAdapter, error) {
 	}
 	return &RedisAdapter{
 		rdb:        r,
+		ctx:        context.Background(),
 		serverName: op.ServerName,
 	}, nil
 }

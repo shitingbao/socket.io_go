@@ -184,7 +184,9 @@ func (r *RedisAdapter) computeExceptSids(exceptRooms *types.Set[socket.Room]) *t
 	return exceptSids
 }
 
-func (r *RedisAdapter) run() {}
+func (r *RedisAdapter) run() {
+	r.rdb.Subscribe(r.ctx)
+}
 
 // register can join your system
 func (r *RedisAdapter) register() {}
