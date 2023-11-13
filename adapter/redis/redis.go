@@ -1,7 +1,7 @@
 package redis
 
 import (
-	"log"
+	"encoding/json"
 
 	"github.com/zishang520/engine.io/events"
 	"github.com/zishang520/engine.io/types"
@@ -19,6 +19,7 @@ func (r *RedisAdapter) New(nsp socket.NamespaceInterface) socket.Adapter {
 	r.encoder = nsp.Server().Encoder()
 	r._broadcast = r.broadcast
 	r.pubSub = r.rdb.Subscribe(r.ctx, r.serverName)
+	go r.run()
 	return r
 }
 
@@ -106,7 +107,13 @@ func (r *RedisAdapter) DelSockets(*socket.BroadcastOptions, []socket.Room) {}
 func (r *RedisAdapter) DisconnectSockets(*socket.BroadcastOptions, bool) {}
 
 // Send a packet to the other Socket.IO servers in the cluster
-func (r *RedisAdapter) ServerSideEmit([]any) error { return nil }
+func (r *RedisAdapter) ServerSideEmit(packs []any) error {
+	b, err := json.Marshal(packs)
+	if err != nil {
+		return err
+	}
+	return r.rdb.Publish(r.ctx, r.serverName, string(b)).Err()
+}
 
 // Save the client session in order to restore it upon reconnection.
 func (r *RedisAdapter) PersistSession(*socket.SessionToPersist) {}
@@ -190,8 +197,13 @@ func (r *RedisAdapter) run() {
 	for {
 		mes, err := r.pubSub.ReceiveMessage(r.ctx)
 		if err != nil {
-			return
+			panic(err)
 		}
-		log.Println("mes=:", mes)
+		data := SubscribeMessage{}
+		if err := json.Unmarshal([]byte(mes.Payload), &data); err != nil {
+			continue
+		}
+		r.Emit(events.EventName(data.Room), data.Content)
+		// socket.NewSocket()
 	}
 }

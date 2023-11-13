@@ -82,6 +82,6 @@ func NewRedisAdapter(opts ...Option) (*RedisAdapter, error) {
 }
 
 type SubscribeMessage struct {
-	MesType int
-	Content []byte
+	Room    string
+	Content any
 }
