@@ -1,6 +1,8 @@
 package redis
 
 import (
+	"log"
+
 	"github.com/zishang520/engine.io/events"
 	"github.com/zishang520/engine.io/types"
 	"github.com/zishang520/socket.io-go-parser/parser"
@@ -16,8 +18,11 @@ func (r *RedisAdapter) New(nsp socket.NamespaceInterface) socket.Adapter {
 	r.sids = &types.Map[socket.SocketId, *types.Set[socket.Room]]{}
 	r.encoder = nsp.Server().Encoder()
 	r._broadcast = r.broadcast
-
+	r.pubSub = r.rdb.Subscribe(r.ctx, r.serverName)
 	return r
+}
+
+func (r *RedisAdapter) Init() {
 }
 
 func (r *RedisAdapter) Rooms() *types.Map[socket.Room, *types.Set[socket.SocketId]] {
@@ -32,9 +37,6 @@ func (r *RedisAdapter) Sids() *types.Map[socket.SocketId, *types.Set[socket.Room
 
 func (r *RedisAdapter) Nsp() socket.NamespaceInterface {
 	return nil
-}
-
-func (r *RedisAdapter) Init() {
 }
 
 // To be overridden
@@ -185,8 +187,11 @@ func (r *RedisAdapter) computeExceptSids(exceptRooms *types.Set[socket.Room]) *t
 }
 
 func (r *RedisAdapter) run() {
-	r.rdb.Subscribe(r.ctx)
+	for {
+		mes, err := r.pubSub.ReceiveMessage(r.ctx)
+		if err != nil {
+			return
+		}
+		log.Println("mes=:", mes)
+	}
 }
-
-// register can join your system
-func (r *RedisAdapter) register() {}

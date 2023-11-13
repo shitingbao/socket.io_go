@@ -16,7 +16,7 @@ var serverName = "redisAdapterTest"
 
 func ExampleRedisAdapter() {
 	// one node
-	go OtherNodeExampleRedisAdapter()
+	// go OtherNodeExampleRedisAdapter()
 
 	// two node
 	ExampleRedisAdapterNode()
@@ -30,6 +30,9 @@ func ExampleRedisAdapter() {
 
 func ExampleRedisAdapterNode() {
 	g := gin.Default()
+
+	// srv is listen's address or http server
+	// opts *ServerOptions
 	io := socket.NewServer(nil, nil)
 
 	rdsAdapter, err := redis.NewRedisAdapter(

@@ -26,6 +26,7 @@ type RedisAdapter struct {
 	// serverName should be a unique identifier in the system to guide all nodes to join their own services.
 	serverName string
 	rdb        *redis.Client
+	pubSub     *redis.PubSub
 	ctx        context.Context
 
 	nsp     socket.NamespaceInterface
@@ -78,4 +79,9 @@ func NewRedisAdapter(opts ...Option) (*RedisAdapter, error) {
 		ctx:        context.Background(),
 		serverName: op.ServerName,
 	}, nil
+}
+
+type SubscribeMessage struct {
+	MesType int
+	Content []byte
 }
