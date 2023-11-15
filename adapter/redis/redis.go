@@ -2,6 +2,7 @@ package redis
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/zishang520/engine.io/events"
 	"github.com/zishang520/engine.io/types"
@@ -14,11 +15,25 @@ var _ socket.Adapter = (*RedisAdapter)(nil)
 func (r *RedisAdapter) New(nsp socket.NamespaceInterface) socket.Adapter {
 	r.EventEmitter = events.New()
 	r.nsp = nsp
+	prefix := r.serverId + "socket.io"
+	r.channel = prefix + "#" + nsp.Name() + "#"
+	r.requestChannel = prefix + "-request#" + nsp.Name() + "#"
+	r.responseChannel = prefix + "-response#" + nsp.Name() + "#"
+	r.specificResponseChannel =
+		r.responseChannel + r.serverId + "#"
+
+	r.rdb.PSubscribe(r.ctx, r.channel+"*")
+	r.rdb.Subscribe(r.ctx,
+		r.requestChannel,
+		r.responseChannel,
+		r.specificResponseChannel,
+	)
+
 	r.rooms = &types.Map[socket.Room, *types.Set[socket.SocketId]]{}
 	r.sids = &types.Map[socket.SocketId, *types.Set[socket.Room]]{}
 	r.encoder = nsp.Server().Encoder()
 	r._broadcast = r.broadcast
-	r.pubSub = r.rdb.Subscribe(r.ctx, r.serverName)
+	// r.pubSub = r.rdb.Subscribe(r.ctx, r.subscribeGlobeKey())
 	go r.run()
 	return r
 }
@@ -44,6 +59,7 @@ func (r *RedisAdapter) Nsp() socket.NamespaceInterface {
 func (r *RedisAdapter) Close() {}
 
 // Returns the number of Socket.IO servers in the cluster
+// 每个server 都有自己的id，每次onmessage 时把 id带上，每次set 一下
 func (r *RedisAdapter) ServerCount() int64 { return 0 }
 
 // Adds a socket to a list of room.
@@ -98,7 +114,8 @@ func (r *RedisAdapter) FetchSockets(*socket.BroadcastOptions) func(func([]socket
 }
 
 // Makes the matching socket instances join the specified rooms
-func (r *RedisAdapter) AddSockets(*socket.BroadcastOptions, []socket.Room) {}
+func (r *RedisAdapter) AddSockets(socket *socket.BroadcastOptions, room []socket.Room) {
+}
 
 // Makes the matching socket instances leave the specified rooms
 func (r *RedisAdapter) DelSockets(*socket.BroadcastOptions, []socket.Room) {}
@@ -107,12 +124,10 @@ func (r *RedisAdapter) DelSockets(*socket.BroadcastOptions, []socket.Room) {}
 func (r *RedisAdapter) DisconnectSockets(*socket.BroadcastOptions, bool) {}
 
 // Send a packet to the other Socket.IO servers in the cluster
+// this is globe packet
 func (r *RedisAdapter) ServerSideEmit(packs []any) error {
-	b, err := json.Marshal(packs)
-	if err != nil {
-		return err
-	}
-	return r.rdb.Publish(r.ctx, r.serverName, string(b)).Err()
+	// return r.rdb.Publish(r.ctx, r.subscribeGlobeKey(), string(b)).Err()
+	return nil
 }
 
 // Save the client session in order to restore it upon reconnection.
@@ -194,16 +209,44 @@ func (r *RedisAdapter) computeExceptSids(exceptRooms *types.Set[socket.Room]) *t
 }
 
 func (r *RedisAdapter) run() {
-	for {
-		mes, err := r.pubSub.ReceiveMessage(r.ctx)
-		if err != nil {
-			panic(err)
-		}
-		data := SubscribeMessage{}
-		if err := json.Unmarshal([]byte(mes.Payload), &data); err != nil {
-			continue
-		}
-		r.Emit(events.EventName(data.Room), data.Content)
-		// socket.NewSocket()
+	// for {
+	// 	mes, err := r.pubSub.ReceiveMessage(r.ctx)
+	// 	if err != nil {
+	// 		panic(err)
+	// 	}
+	// 	da := ClusterMessage{}
+	// 	if err := json.Unmarshal([]byte(mes.Payload), &da); err != nil {
+	// 		continue
+	// 	}
+	// 	// r.Emit(events.EventName(data.Room), da.Data)
+	// 	// socket.NewSocket()
+	// }
+}
+
+func (r *RedisAdapter) onmessage(channel, msg string) {
+	if !strings.HasPrefix(channel, r.channel) {
+		return
 	}
+	room := channel[len(r.channel):]
+	if room != "" {
+		return
+	}
+	args := bindMessage{}
+	if err := json.Unmarshal([]byte(msg), &args); err != nil {
+		return
+	}
+	if args.ServerId == r.serverId {
+		return
+	}
+	if args.Packet.Nsp == "" {
+		args.Packet.Nsp = "/"
+	}
+	if args.Packet.Nsp != r.nsp.Name() {
+		return
+	}
+
+	args.Opts.Rooms = &types.Set[socket.Room]{}
+	args.Opts.Except = &types.Set[socket.Room]{}
+	r.Broadcast(&args.Packet, &args.Opts)
+	// super.broadcast(packet, opts);
 }

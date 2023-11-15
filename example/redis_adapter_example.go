@@ -37,7 +37,6 @@ func ExampleRedisAdapterNode() {
 
 	rdsAdapter, err := redis.NewRedisAdapter(
 		redis.WithRedisAddress("127.0.0.1:6379"),
-		redis.WithRedisServerName(serverName),
 	)
 	if err != nil {
 		log.Println(err)
@@ -72,7 +71,6 @@ func OtherNodeExampleRedisAdapter() {
 
 	rdsAdapter, err := redis.NewRedisAdapter(
 		redis.WithRedisAddress("127.0.0.1:6379"),
-		redis.WithRedisServerName(serverName),
 	)
 	if err != nil {
 		log.Println(err)
@@ -81,12 +79,13 @@ func OtherNodeExampleRedisAdapter() {
 	io.SetAdapter(rdsAdapter)
 	io.Of("/user", nil).On("connection", func(clients ...any) {
 		log.Println("connect")
-		client := clients[0].(*socket.Socket)
-		client.On("ping", func(datas ...any) {
+		socket := clients[0].(*socket.Socket)
+		socket.On("ping", func(datas ...any) {
 			log.Println("heart")
-			client.Emit("pong", "pong")
+			socket.Emit("pong", "pong")
+			socket.Join("")
 		})
-		client.On("disconnect", func(...any) {
+		socket.On("disconnect", func(...any) {
 			log.Println("disconnect")
 		})
 	})
