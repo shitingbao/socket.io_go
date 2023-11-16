@@ -2,8 +2,10 @@ package redis
 
 import (
 	"encoding/json"
+	"log"
 	"strings"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/zishang520/engine.io/events"
 	"github.com/zishang520/engine.io/types"
 	"github.com/zishang520/socket.io-go-parser/parser"
@@ -15,6 +17,11 @@ var _ socket.Adapter = (*RedisAdapter)(nil)
 func (r *RedisAdapter) New(nsp socket.NamespaceInterface) socket.Adapter {
 	r.EventEmitter = events.New()
 	r.nsp = nsp
+	r.rooms = &types.Map[socket.Room, *types.Set[socket.SocketId]]{}
+	r.sids = &types.Map[socket.SocketId, *types.Set[socket.Room]]{}
+	r.encoder = nsp.Server().Encoder()
+	r._broadcast = r.broadcast
+
 	prefix := r.serverId + "socket.io"
 	r.channel = prefix + "#" + nsp.Name() + "#"
 	r.requestChannel = prefix + "-request#" + nsp.Name() + "#"
@@ -29,12 +36,19 @@ func (r *RedisAdapter) New(nsp socket.NamespaceInterface) socket.Adapter {
 		r.specificResponseChannel,
 	)
 
-	r.rooms = &types.Map[socket.Room, *types.Set[socket.SocketId]]{}
-	r.sids = &types.Map[socket.SocketId, *types.Set[socket.Room]]{}
-	r.encoder = nsp.Server().Encoder()
-	r._broadcast = r.broadcast
 	// r.pubSub = r.rdb.Subscribe(r.ctx, r.subscribeGlobeKey())
-	go r.run()
+	r.redisListeners["psub"] = func(msg, channel string) {
+		r.onmessage(channel, msg)
+	}
+
+	r.redisListeners["sub"] = func(msg, channel string) {
+		r.onrequest(channel, msg)
+	}
+
+	psub := r.rdb.PSubscribe(r.ctx, r.channel) //  r.redisListeners["psub"]
+	r.run("psub", psub)
+	sub := r.rdb.Subscribe(r.ctx, r.requestChannel, r.responseChannel, r.specificResponseChannel)
+	r.run("sub", sub)
 	return r
 }
 
@@ -208,19 +222,16 @@ func (r *RedisAdapter) computeExceptSids(exceptRooms *types.Set[socket.Room]) *t
 	return exceptSids
 }
 
-func (r *RedisAdapter) run() {
-	// for {
-	// 	mes, err := r.pubSub.ReceiveMessage(r.ctx)
-	// 	if err != nil {
-	// 		panic(err)
-	// 	}
-	// 	da := ClusterMessage{}
-	// 	if err := json.Unmarshal([]byte(mes.Payload), &da); err != nil {
-	// 		continue
-	// 	}
-	// 	// r.Emit(events.EventName(data.Room), da.Data)
-	// 	// socket.NewSocket()
-	// }
+func (r *RedisAdapter) run(listen string, sub *redis.PubSub) {
+	for {
+		mes, err := sub.ReceiveMessage(r.ctx)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		listener := r.redisListeners["sub"]
+		listener(mes.Channel, mes.Payload)
+	}
 }
 
 func (r *RedisAdapter) onmessage(channel, msg string) {
@@ -249,4 +260,343 @@ func (r *RedisAdapter) onmessage(channel, msg string) {
 	args.Opts.Except = &types.Set[socket.Room]{}
 	r.Broadcast(&args.Packet, &args.Opts)
 	// super.broadcast(packet, opts);
+}
+
+func (r *RedisAdapter) onrequest(channel, msg string) {
+	if strings.HasPrefix(channel, r.responseChannel) {
+		r.onresponse(channel, msg)
+		return
+	}
+	if strings.HasPrefix(channel, r.requestChannel) {
+		log.Println("ignore different channel")
+		return
+	}
+	// let request;
+	request := subRequest{}
+	if err := json.Unmarshal([]byte(msg), &request); err != nil {
+		log.Println(err)
+		return
+	}
+	// switch request.Type {
+	// case SOCKETS:
+	// 	if r.requests[request.RequestId] != nil {
+	// 		return
+	// 	}
+	// 	sockets := r.apply()
+	// }
+	// let response, socket;
+
+	// switch (request.type) {
+	//   case RequestType.SOCKETS:
+	//     if (this.requests.has(request.requestId)) {
+	//       return;
+	//     }
+
+	//     const sockets = await super.sockets(new Set(request.rooms));
+
+	//     response = JSON.stringify({
+	//       requestId: request.requestId,
+	//       sockets: [...sockets],
+	//     });
+
+	//     this.publishResponse(request, response);
+	//     break;
+
+	//   case RequestType.ALL_ROOMS:
+	//     if (this.requests.has(request.requestId)) {
+	//       return;
+	//     }
+
+	//     response = JSON.stringify({
+	//       requestId: request.requestId,
+	//       rooms: [...this.rooms.keys()],
+	//     });
+
+	//     this.publishResponse(request, response);
+	//     break;
+
+	//   case RequestType.REMOTE_JOIN:
+	//     if (request.opts) {
+	//       const opts = {
+	//         rooms: new Set<Room>(request.opts.rooms),
+	//         except: new Set<Room>(request.opts.except),
+	//       };
+	//       return super.addSockets(opts, request.rooms);
+	//     }
+
+	//     socket = this.nsp.sockets.get(request.sid);
+	//     if (!socket) {
+	//       return;
+	//     }
+
+	//     socket.join(request.room);
+
+	//     response = JSON.stringify({
+	//       requestId: request.requestId,
+	//     });
+
+	//     this.publishResponse(request, response);
+	//     break;
+
+	//   case RequestType.REMOTE_LEAVE:
+	//     if (request.opts) {
+	//       const opts = {
+	//         rooms: new Set<Room>(request.opts.rooms),
+	//         except: new Set<Room>(request.opts.except),
+	//       };
+	//       return super.delSockets(opts, request.rooms);
+	//     }
+
+	//     socket = this.nsp.sockets.get(request.sid);
+	//     if (!socket) {
+	//       return;
+	//     }
+
+	//     socket.leave(request.room);
+
+	//     response = JSON.stringify({
+	//       requestId: request.requestId,
+	//     });
+
+	//     this.publishResponse(request, response);
+	//     break;
+
+	//   case RequestType.REMOTE_DISCONNECT:
+	//     if (request.opts) {
+	//       const opts = {
+	//         rooms: new Set<Room>(request.opts.rooms),
+	//         except: new Set<Room>(request.opts.except),
+	//       };
+	//       return super.disconnectSockets(opts, request.close);
+	//     }
+
+	//     socket = this.nsp.sockets.get(request.sid);
+	//     if (!socket) {
+	//       return;
+	//     }
+
+	//     socket.disconnect(request.close);
+
+	//     response = JSON.stringify({
+	//       requestId: request.requestId,
+	//     });
+
+	//     this.publishResponse(request, response);
+	//     break;
+
+	//   case RequestType.REMOTE_FETCH:
+	//     if (this.requests.has(request.requestId)) {
+	//       return;
+	//     }
+
+	//     const opts = {
+	//       rooms: new Set<Room>(request.opts.rooms),
+	//       except: new Set<Room>(request.opts.except),
+	//     };
+	//     const localSockets = await super.fetchSockets(opts);
+
+	//     response = JSON.stringify({
+	//       requestId: request.requestId,
+	//       sockets: localSockets.map((socket) => {
+	//         // remove sessionStore from handshake, as it may contain circular references
+	//         const { sessionStore, ...handshake } = socket.handshake;
+	//         return {
+	//           id: socket.id,
+	//           handshake,
+	//           rooms: [...socket.rooms],
+	//           data: socket.data,
+	//         };
+	//       }),
+	//     });
+
+	//     this.publishResponse(request, response);
+	//     break;
+
+	//   case RequestType.SERVER_SIDE_EMIT:
+	//     if (request.uid === this.uid) {
+	//       debug("ignore same uid");
+	//       return;
+	//     }
+	//     const withAck = request.requestId !== undefined;
+	//     if (!withAck) {
+	//       this.nsp._onServerSideEmit(request.data);
+	//       return;
+	//     }
+	//     let called = false;
+	//     const callback = (arg) => {
+	//       // only one argument is expected
+	//       if (called) {
+	//         return;
+	//       }
+	//       called = true;
+	//       debug("calling acknowledgement with %j", arg);
+	//       this.pubClient.publish(
+	//         this.responseChannel,
+	//         JSON.stringify({
+	//           type: RequestType.SERVER_SIDE_EMIT,
+	//           requestId: request.requestId,
+	//           data: arg,
+	//         })
+	//       );
+	//     };
+	//     request.data.push(callback);
+	//     this.nsp._onServerSideEmit(request.data);
+	//     break;
+
+	//   case RequestType.BROADCAST: {
+	//     if (this.ackRequests.has(request.requestId)) {
+	//       // ignore self
+	//       return;
+	//     }
+
+	//     const opts = {
+	//       rooms: new Set<Room>(request.opts.rooms),
+	//       except: new Set<Room>(request.opts.except),
+	//     };
+
+	//     super.broadcastWithAck(
+	//       request.packet,
+	//       opts,
+	//       (clientCount) => {
+	//         debug("waiting for %d client acknowledgements", clientCount);
+	//         this.publishResponse(
+	//           request,
+	//           JSON.stringify({
+	//             type: RequestType.BROADCAST_CLIENT_COUNT,
+	//             requestId: request.requestId,
+	//             clientCount,
+	//           })
+	//         );
+	//       },
+	//       (arg) => {
+	//         debug("received acknowledgement with value %j", arg);
+
+	//         this.publishResponse(
+	//           request,
+	//           this.parser.encode({
+	//             type: RequestType.BROADCAST_ACK,
+	//             requestId: request.requestId,
+	//             packet: arg,
+	//           })
+	//         );
+	//       }
+	//     );
+	//     break;
+	//   }
+
+	//   default:
+	//     debug("ignoring unknown request type: %s", request.type);
+	// }
+}
+
+func (r *RedisAdapter) onresponse(channel, msg string) {
+	// let response;
+	// response:=""
+	//   // if the buffer starts with a "{" character
+	// args := bindMessage{}
+	// if err := json.Unmarshal([]byte(msg), &args); err != nil {
+	// 	return
+	// }
+
+	// const requestId = response.requestId;
+
+	// if (this.ackRequests.has(requestId)) {
+	//   const ackRequest = this.ackRequests.get(requestId);
+
+	//   switch (response.type) {
+	//     case RequestType.BROADCAST_CLIENT_COUNT: {
+	//       ackRequest?.clientCountCallback(response.clientCount);
+	//       break;
+	//     }
+
+	//     case RequestType.BROADCAST_ACK: {
+	//       ackRequest?.ack(response.packet);
+	//       break;
+	//     }
+	//   }
+	//   return;
+	// }
+
+	// if (
+	//   !requestId ||
+	//   !(this.requests.has(requestId) || this.ackRequests.has(requestId))
+	// ) {
+	//   debug("ignoring unknown request");
+	//   return;
+	// }
+
+	// debug("received response %j", response);
+
+	// const request = this.requests.get(requestId);
+
+	// switch (request.type) {
+	//   case RequestType.SOCKETS:
+	//   case RequestType.REMOTE_FETCH:
+	//     request.msgCount++;
+
+	//     // ignore if response does not contain 'sockets' key
+	//     if (!response.sockets || !Array.isArray(response.sockets)) return;
+
+	//     if (request.type === RequestType.SOCKETS) {
+	//       response.sockets.forEach((s) => request.sockets.add(s));
+	//     } else {
+	//       response.sockets.forEach((s) => request.sockets.push(s));
+	//     }
+
+	//     if (request.msgCount === request.numSub) {
+	//       clearTimeout(request.timeout);
+	//       if (request.resolve) {
+	//         request.resolve(request.sockets);
+	//       }
+	//       this.requests.delete(requestId);
+	//     }
+	//     break;
+
+	//   case RequestType.ALL_ROOMS:
+	//     request.msgCount++;
+
+	//     // ignore if response does not contain 'rooms' key
+	//     if (!response.rooms || !Array.isArray(response.rooms)) return;
+
+	//     response.rooms.forEach((s) => request.rooms.add(s));
+
+	//     if (request.msgCount === request.numSub) {
+	//       clearTimeout(request.timeout);
+	//       if (request.resolve) {
+	//         request.resolve(request.rooms);
+	//       }
+	//       this.requests.delete(requestId);
+	//     }
+	//     break;
+
+	//   case RequestType.REMOTE_JOIN:
+	//   case RequestType.REMOTE_LEAVE:
+	//   case RequestType.REMOTE_DISCONNECT:
+	//     clearTimeout(request.timeout);
+	//     if (request.resolve) {
+	//       request.resolve();
+	//     }
+	//     this.requests.delete(requestId);
+	//     break;
+
+	//   case RequestType.SERVER_SIDE_EMIT:
+	//     request.responses.push(response.data);
+
+	//     debug(
+	//       "serverSideEmit: got %d responses out of %d",
+	//       request.responses.length,
+	//       request.numSub
+	//     );
+	//     if (request.responses.length === request.numSub) {
+	//       clearTimeout(request.timeout);
+	//       if (request.resolve) {
+	//         request.resolve(null, request.responses);
+	//       }
+	//       this.requests.delete(requestId);
+	//     }
+	//     break;
+
+	//   default:
+	//     debug("ignoring unknown request type: %s", request.type);
+	// }
 }

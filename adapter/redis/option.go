@@ -128,9 +128,9 @@ type RedisAdapter struct {
 	requestChannel          string
 	responseChannel         string
 	specificResponseChannel string
-	requests                map[string]Request
+	requests                map[string]*Request
 	ackRequests             map[string]AckRequest
-	redisListeners          map[string](func())
+	redisListeners          map[string](func(channel, msg string))
 	readonly                friendlyErrorHandler
 	parser                  Parser
 }
@@ -165,9 +165,9 @@ func NewRedisAdapter(opts ...Option) (*RedisAdapter, error) {
 		requestsTimeout:                  op.RequestsTimeout,
 		publishOnSpecificResponseChannel: op.PublishOnSpecificResponseChannel,
 
-		requests:       make(map[string]Request),
+		requests:       make(map[string]*Request),
 		ackRequests:    make(map[string]AckRequest),
-		redisListeners: make(map[string](func())),
+		redisListeners: make(map[string](func(string, string))),
 		readonly:       func() {},
 	}, nil
 }
@@ -187,4 +187,9 @@ type bindMessage struct {
 	ServerId string
 	Packet   parser.Packet
 	Opts     socket.BroadcastOptions
+}
+
+type subRequest struct {
+	Type      RequestType
+	RequestId string
 }
