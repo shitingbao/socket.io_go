@@ -229,7 +229,7 @@ func (r *RedisAdapter) run(listen string, sub *redis.PubSub) {
 			log.Println(err)
 			continue
 		}
-		listener := r.redisListeners["sub"]
+		listener := r.redisListeners[listen]
 		listener(mes.Channel, mes.Payload)
 	}
 }
@@ -277,326 +277,265 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 		log.Println(err)
 		return
 	}
-	// switch request.Type {
-	// case SOCKETS:
-	// 	if r.requests[request.RequestId] != nil {
-	// 		return
-	// 	}
-	// 	sockets := r.apply()
-	// }
-	// let response, socket;
+	switch request.Type {
+	case SOCKETS:
+		if r.requests[request.RequestId] != nil {
+			return
+		}
+		rms := &types.Set[socket.Room]{}
+		for _, v := range request.Rooms {
+			rms.Add(v)
+		}
+		sockets := r.Sockets(rms)
+		response := struct {
+			RequestId string
+			Sockets   *types.Set[socket.SocketId]
+		}{
+			RequestId: request.RequestId,
+			Sockets:   sockets,
+		}
+		r.publishResponse(request.RequestId, response)
+	case ALL_ROOMS:
+		if r.requests[request.RequestId] != nil {
+			return
+		}
+		response := struct {
+			RequestId string
+			Rooms     []socket.Room
+		}{
+			RequestId: request.RequestId,
+			Rooms:     r.Rooms().Keys(),
+		}
+		r.publishResponse(request.RequestId, response)
+	case REMOTE_JOIN:
+		if request.Opts != nil {
+			r.AddSockets(request.Opts, request.Rooms)
+			return
+		}
+		socket, ok := r.nsp.Sockets().Load(request.Sid)
+		if !ok {
+			return
+		}
+		socket.Join(request.Rooms...)
+		response := struct {
+			RequestId string
+		}{
+			RequestId: request.RequestId,
+		}
+		r.publishResponse(request.RequestId, response)
 
-	// switch (request.type) {
-	//   case RequestType.SOCKETS:
-	//     if (this.requests.has(request.requestId)) {
-	//       return;
-	//     }
+	case REMOTE_LEAVE:
+		if request.Opts != nil {
+			r.DelSockets(request.Opts, request.Rooms)
+			return
+		}
+		socket, ok := r.nsp.Sockets().Load(request.Sid)
+		if !ok {
+			return
+		}
+		if len(request.Rooms) > 0 {
+			socket.Leave(request.Rooms[0])
+		}
+		response := struct {
+			RequestId string
+		}{
+			RequestId: request.RequestId,
+		}
+		r.publishResponse(request.RequestId, response)
 
-	//     const sockets = await super.sockets(new Set(request.rooms));
+	case REMOTE_DISCONNECT:
+		if request.Opts != nil {
+			r.DisconnectSockets(request.Opts, request.Close)
+			return
+		}
+		socket, ok := r.nsp.Sockets().Load(request.Sid)
+		if !ok {
+			return
+		}
+		socket.Disconnect(request.Close)
+		response := struct {
+			RequestId string
+		}{
+			RequestId: request.RequestId,
+		}
+		r.publishResponse(request.RequestId, response)
 
-	//     response = JSON.stringify({
-	//       requestId: request.requestId,
-	//       sockets: [...sockets],
-	//     });
+	case REMOTE_FETCH:
+		if r.requests[request.RequestId] != nil {
+			return
+		}
+		type responseData struct {
+			Id        socket.SocketId
+			Handshake socket.Handshake
+			Rooms     *types.Set[socket.Room]
+			Data      any
+		}
+		datas := []responseData{}
+		fech := r.FetchSockets(request.Opts)
+		socketFetch := func(sockets []socket.SocketDetails, err error) {
+			for _, sock := range sockets {
+				da := responseData{
+					Id:        sock.Id(),
+					Handshake: *sock.Handshake(),
+					Rooms:     sock.Rooms(),
+					Data:      sock.Data(),
+				}
+				datas = append(datas, da)
+			}
+		}
+		fech(socketFetch)
+		r.publishResponse(request.RequestId, datas)
+	case SERVER_SIDE_EMIT:
+		if request.Uid == r.uid {
+			return
+		}
 
-	//     this.publishResponse(request, response);
-	//     break;
-
-	//   case RequestType.ALL_ROOMS:
-	//     if (this.requests.has(request.requestId)) {
-	//       return;
-	//     }
-
-	//     response = JSON.stringify({
-	//       requestId: request.requestId,
-	//       rooms: [...this.rooms.keys()],
-	//     });
-
-	//     this.publishResponse(request, response);
-	//     break;
-
-	//   case RequestType.REMOTE_JOIN:
-	//     if (request.opts) {
-	//       const opts = {
-	//         rooms: new Set<Room>(request.opts.rooms),
-	//         except: new Set<Room>(request.opts.except),
-	//       };
-	//       return super.addSockets(opts, request.rooms);
-	//     }
-
-	//     socket = this.nsp.sockets.get(request.sid);
-	//     if (!socket) {
-	//       return;
-	//     }
-
-	//     socket.join(request.room);
-
-	//     response = JSON.stringify({
-	//       requestId: request.requestId,
-	//     });
-
-	//     this.publishResponse(request, response);
-	//     break;
-
-	//   case RequestType.REMOTE_LEAVE:
-	//     if (request.opts) {
-	//       const opts = {
-	//         rooms: new Set<Room>(request.opts.rooms),
-	//         except: new Set<Room>(request.opts.except),
-	//       };
-	//       return super.delSockets(opts, request.rooms);
-	//     }
-
-	//     socket = this.nsp.sockets.get(request.sid);
-	//     if (!socket) {
-	//       return;
-	//     }
-
-	//     socket.leave(request.room);
-
-	//     response = JSON.stringify({
-	//       requestId: request.requestId,
-	//     });
-
-	//     this.publishResponse(request, response);
-	//     break;
-
-	//   case RequestType.REMOTE_DISCONNECT:
-	//     if (request.opts) {
-	//       const opts = {
-	//         rooms: new Set<Room>(request.opts.rooms),
-	//         except: new Set<Room>(request.opts.except),
-	//       };
-	//       return super.disconnectSockets(opts, request.close);
-	//     }
-
-	//     socket = this.nsp.sockets.get(request.sid);
-	//     if (!socket) {
-	//       return;
-	//     }
-
-	//     socket.disconnect(request.close);
-
-	//     response = JSON.stringify({
-	//       requestId: request.requestId,
-	//     });
-
-	//     this.publishResponse(request, response);
-	//     break;
-
-	//   case RequestType.REMOTE_FETCH:
-	//     if (this.requests.has(request.requestId)) {
-	//       return;
-	//     }
-
-	//     const opts = {
-	//       rooms: new Set<Room>(request.opts.rooms),
-	//       except: new Set<Room>(request.opts.except),
-	//     };
-	//     const localSockets = await super.fetchSockets(opts);
-
-	//     response = JSON.stringify({
-	//       requestId: request.requestId,
-	//       sockets: localSockets.map((socket) => {
-	//         // remove sessionStore from handshake, as it may contain circular references
-	//         const { sessionStore, ...handshake } = socket.handshake;
-	//         return {
-	//           id: socket.id,
-	//           handshake,
-	//           rooms: [...socket.rooms],
-	//           data: socket.data,
-	//         };
-	//       }),
-	//     });
-
-	//     this.publishResponse(request, response);
-	//     break;
-
-	//   case RequestType.SERVER_SIDE_EMIT:
-	//     if (request.uid === this.uid) {
-	//       debug("ignore same uid");
-	//       return;
-	//     }
-	//     const withAck = request.requestId !== undefined;
-	//     if (!withAck) {
-	//       this.nsp._onServerSideEmit(request.data);
-	//       return;
-	//     }
-	//     let called = false;
-	//     const callback = (arg) => {
-	//       // only one argument is expected
-	//       if (called) {
-	//         return;
-	//       }
-	//       called = true;
-	//       debug("calling acknowledgement with %j", arg);
-	//       this.pubClient.publish(
-	//         this.responseChannel,
-	//         JSON.stringify({
-	//           type: RequestType.SERVER_SIDE_EMIT,
-	//           requestId: request.requestId,
-	//           data: arg,
-	//         })
-	//       );
-	//     };
-	//     request.data.push(callback);
-	//     this.nsp._onServerSideEmit(request.data);
-	//     break;
-
-	//   case RequestType.BROADCAST: {
-	//     if (this.ackRequests.has(request.requestId)) {
-	//       // ignore self
-	//       return;
-	//     }
-
-	//     const opts = {
-	//       rooms: new Set<Room>(request.opts.rooms),
-	//       except: new Set<Room>(request.opts.except),
-	//     };
-
-	//     super.broadcastWithAck(
-	//       request.packet,
-	//       opts,
-	//       (clientCount) => {
-	//         debug("waiting for %d client acknowledgements", clientCount);
-	//         this.publishResponse(
-	//           request,
-	//           JSON.stringify({
-	//             type: RequestType.BROADCAST_CLIENT_COUNT,
-	//             requestId: request.requestId,
-	//             clientCount,
-	//           })
-	//         );
-	//       },
-	//       (arg) => {
-	//         debug("received acknowledgement with value %j", arg);
-
-	//         this.publishResponse(
-	//           request,
-	//           this.parser.encode({
-	//             type: RequestType.BROADCAST_ACK,
-	//             requestId: request.requestId,
-	//             packet: arg,
-	//           })
-	//         );
-	//       }
-	//     );
-	//     break;
-	//   }
-
-	//   default:
-	//     debug("ignoring unknown request type: %s", request.type);
-	// }
+		withAck := request.RequestId
+		if withAck != "" {
+			// r.nsp.EmitUntyped()
+		}
+		// if (request.uid === this.uid) {
+		//   debug("ignore same uid");
+		//   return;
+		// }
+		// const withAck = request.requestId !== undefined;
+		// if (!withAck) {
+		//   this.nsp._onServerSideEmit(request.data);
+		//   return;
+		// }
+		// let called = false;
+		// const callback = (arg) => {
+		//   // only one argument is expected
+		//   if (called) {
+		//     return;
+		//   }
+		//   called = true;
+		//   debug("calling acknowledgement with %j", arg);
+		//   this.pubClient.publish(
+		//     this.responseChannel,
+		//     JSON.stringify({
+		//       type: RequestType.SERVER_SIDE_EMIT,
+		//       requestId: request.requestId,
+		//       data: arg,
+		//     })
+		//   );
+		// };
+		// request.data.push(callback);
+		// this.nsp._onServerSideEmit(request.data);
+		// break;
+	case BROADCAST:
+		{
+			req := r.ackRequests[request.RequestId]
+			if req != nil {
+				return
+			}
+			opt := &socket.BroadcastOptions{
+				Rooms:  request.Opts.Rooms,
+				Except: request.Opts.Except,
+			}
+			r.BroadcastWithAck(request.Packet, opt, func(clientCount uint64) {
+				r.publishResponse(request.RequestId, struct {
+					Type        SocketDataType
+					RequestId   string
+					ClientCount uint64
+				}{Type: BROADCAST_CLIENT_COUNT,
+					RequestId:   request.RequestId,
+					ClientCount: clientCount,
+				})
+			}, func(arg []any, err error) {
+				r.publishResponse(request.RequestId, r.parser.encode(
+					struct {
+						Type      SocketDataType
+						RequestId string
+						packet    []any
+					}{Type: BROADCAST_CLIENT_COUNT,
+						RequestId: request.RequestId,
+						packet:    arg,
+					},
+				))
+			})
+		}
+	default:
+		log.Printf("ignoring unknown request type: %s", request.Type)
+	}
 }
 
 func (r *RedisAdapter) onresponse(channel, msg string) {
-	// let response;
-	// response:=""
-	//   // if the buffer starts with a "{" character
-	// args := bindMessage{}
-	// if err := json.Unmarshal([]byte(msg), &args); err != nil {
-	// 	return
-	// }
+	response := subRequest{}
+	if err := json.Unmarshal([]byte(msg), &response); err != nil {
+		return
+	}
+	requestId := response.RequestId
 
-	// const requestId = response.requestId;
+	if r.ackRequests[requestId] != nil {
+		ackRequest := r.ackRequests[requestId]
+		switch response.Type {
+		case BROADCAST_CLIENT_COUNT:
+			ackRequest.clientCountCallback(response.ClientCount)
+		case BROADCAST_ACK:
+			ackRequest.ack(response.Packet)
+		}
+		return
+	}
+	if requestId == "" || !(r.requests[requestId] != nil || r.ackRequests[requestId] != nil) {
+		return
+	}
+	request := r.requests[requestId]
+	switch request.Type {
+	case SOCKETS:
+	case REMOTE_FETCH:
+		request.MsgCount++
+		if response.Sockets == nil {
+			return
+		}
+		request.Sockets = append(request.Sockets, response.Sockets...)
+		if request.MsgCount == request.NumSub {
+			// clearTimeout(request.timeout)
+			if request.Resolve != nil {
+				request.Resolve(request.Sockets)
+			}
+			delete(r.requests, requestId)
+		}
+	case ALL_ROOMS:
+		request.MsgCount++
+		if response.Rooms == nil {
+			return
+		}
+		request.Rooms = append(request.Rooms, response.Rooms...)
+		if request.MsgCount == request.NumSub {
+			// clearTimeout(request.timeout)
+			if request.Resolve != nil {
+				request.Resolve(request.Rooms)
+			}
+			delete(r.requests, requestId)
+		}
 
-	// if (this.ackRequests.has(requestId)) {
-	//   const ackRequest = this.ackRequests.get(requestId);
+	case REMOTE_JOIN:
+	case REMOTE_LEAVE:
+	case REMOTE_DISCONNECT:
+		//  clearTimeout(request.timeout);
+		if request.Resolve != nil {
+			request.Resolve()
+		}
+		delete(r.requests, (requestId))
+	case SERVER_SIDE_EMIT:
+		request.Responses = append(request.Responses, response.Packet.Data)
+		if len(request.Responses) == request.NumSub {
+			// clearTimeout(request.timeout);
+			if request.Resolve != nil {
+				request.Resolve(request.Responses...)
+			}
+			delete(r.requests, requestId)
+		}
+	default:
+		log.Println("ignoring unknown request type: %s", request.Type)
+	}
+}
 
-	//   switch (response.type) {
-	//     case RequestType.BROADCAST_CLIENT_COUNT: {
-	//       ackRequest?.clientCountCallback(response.clientCount);
-	//       break;
-	//     }
-
-	//     case RequestType.BROADCAST_ACK: {
-	//       ackRequest?.ack(response.packet);
-	//       break;
-	//     }
-	//   }
-	//   return;
-	// }
-
-	// if (
-	//   !requestId ||
-	//   !(this.requests.has(requestId) || this.ackRequests.has(requestId))
-	// ) {
-	//   debug("ignoring unknown request");
-	//   return;
-	// }
-
-	// debug("received response %j", response);
-
-	// const request = this.requests.get(requestId);
-
-	// switch (request.type) {
-	//   case RequestType.SOCKETS:
-	//   case RequestType.REMOTE_FETCH:
-	//     request.msgCount++;
-
-	//     // ignore if response does not contain 'sockets' key
-	//     if (!response.sockets || !Array.isArray(response.sockets)) return;
-
-	//     if (request.type === RequestType.SOCKETS) {
-	//       response.sockets.forEach((s) => request.sockets.add(s));
-	//     } else {
-	//       response.sockets.forEach((s) => request.sockets.push(s));
-	//     }
-
-	//     if (request.msgCount === request.numSub) {
-	//       clearTimeout(request.timeout);
-	//       if (request.resolve) {
-	//         request.resolve(request.sockets);
-	//       }
-	//       this.requests.delete(requestId);
-	//     }
-	//     break;
-
-	//   case RequestType.ALL_ROOMS:
-	//     request.msgCount++;
-
-	//     // ignore if response does not contain 'rooms' key
-	//     if (!response.rooms || !Array.isArray(response.rooms)) return;
-
-	//     response.rooms.forEach((s) => request.rooms.add(s));
-
-	//     if (request.msgCount === request.numSub) {
-	//       clearTimeout(request.timeout);
-	//       if (request.resolve) {
-	//         request.resolve(request.rooms);
-	//       }
-	//       this.requests.delete(requestId);
-	//     }
-	//     break;
-
-	//   case RequestType.REMOTE_JOIN:
-	//   case RequestType.REMOTE_LEAVE:
-	//   case RequestType.REMOTE_DISCONNECT:
-	//     clearTimeout(request.timeout);
-	//     if (request.resolve) {
-	//       request.resolve();
-	//     }
-	//     this.requests.delete(requestId);
-	//     break;
-
-	//   case RequestType.SERVER_SIDE_EMIT:
-	//     request.responses.push(response.data);
-
-	//     debug(
-	//       "serverSideEmit: got %d responses out of %d",
-	//       request.responses.length,
-	//       request.numSub
-	//     );
-	//     if (request.responses.length === request.numSub) {
-	//       clearTimeout(request.timeout);
-	//       if (request.resolve) {
-	//         request.resolve(null, request.responses);
-	//       }
-	//       this.requests.delete(requestId);
-	//     }
-	//     break;
-
-	//   default:
-	//     debug("ignoring unknown request type: %s", request.type);
-	// }
+func (r *RedisAdapter) publishResponse(requestId string, response any) {
+	responseChannel := r.responseChannel + "$" + requestId + "#"
+	if !r.publishOnSpecificResponseChannel {
+		responseChannel = r.responseChannel
+	}
+	r.rdb.Publish(r.ctx, responseChannel, response)
 }

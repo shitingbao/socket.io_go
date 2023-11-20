@@ -11,10 +11,9 @@ import (
 	"github.com/zishang520/socket.io/v2/socket"
 )
 
-type MessageType int
-
 const (
-	INITIAL_HEARTBEAT MessageType = iota + 1
+	// MessageType
+	INITIAL_HEARTBEAT SocketDataType = iota + 1
 	HEARTBEAT
 	BROADCAST
 	SOCKETS_JOIN
@@ -26,6 +25,18 @@ const (
 	SERVER_SIDE_EMIT_RESPONSE
 	BROADCAST_CLIENT_COUNT
 	BROADCAST_ACK
+
+	// RequestType
+	SOCKETS SocketDataType = iota + 1
+	ALL_ROOMS
+	REMOTE_JOIN
+	REMOTE_LEAVE
+	REMOTE_DISCONNECT
+	REMOTE_FETCH
+	Request_SERVER_SIDE_EMIT
+	Request_BROADCAST
+	Request_BROADCAST_CLIENT_COUNT
+	Request_BROADCAST_ACK
 )
 
 type option struct {
@@ -41,27 +52,17 @@ type option struct {
 
 type Option func(*option)
 
-type RequestType int
-
-const (
-	SOCKETS RequestType = iota
-	ALL_ROOMS
-	REMOTE_JOIN
-	REMOTE_LEAVE
-	REMOTE_DISCONNECT
-	REMOTE_FETCH
-	Request_SERVER_SIDE_EMIT
-	Request_BROADCAST
-	Request_BROADCAST_CLIENT_COUNT
-	Request_BROADCAST_ACK
-)
+type SocketDataType int
 
 type Request struct {
-	Type     RequestType
-	Resolve  func()
-	Timeout  int
-	NumSub   int
-	MsgCount int
+	Type      SocketDataType
+	Resolve   func(...any) // []socket.Socket []socket.Room,or []
+	Timeout   int
+	NumSub    int
+	MsgCount  int
+	Sockets   []socket.Socket
+	Rooms     []socket.Room
+	Responses []any
 	// [other: string]: any;
 }
 
@@ -124,6 +125,7 @@ type RedisAdapter struct {
 	requestsTimeout                  int
 	publishOnSpecificResponseChannel bool
 
+	uid                     string // only uid
 	channel                 string
 	requestChannel          string
 	responseChannel         string
@@ -174,7 +176,7 @@ func NewRedisAdapter(opts ...Option) (*RedisAdapter, error) {
 
 type ClusterMessage struct {
 	ServerId string
-	MType    MessageType
+	MType    SocketDataType
 	Data     map[string]any
 }
 
@@ -190,6 +192,14 @@ type bindMessage struct {
 }
 
 type subRequest struct {
-	Type      RequestType
-	RequestId string
+	Uid         string                   `json:"uid"`
+	Sid         socket.SocketId          `json:"sid"`
+	Type        SocketDataType           `json:"type"`
+	RequestId   string                   `json:"request_id"`
+	Rooms       []socket.Room            `json:"rooms"`
+	Opts        *socket.BroadcastOptions `json:"opts"`
+	Close       bool                     `json:"close"`
+	Sockets     []socket.Socket          `json:"sockets"` // bool or []socket.Socket
+	Packet      *parser.Packet           `json:"packet"`
+	ClientCount int                      `json:"client_count"`
 }
