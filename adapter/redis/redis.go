@@ -2,9 +2,11 @@ package redis
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/zishang520/engine.io/events"
 	"github.com/zishang520/engine.io/types"
@@ -29,14 +31,6 @@ func (r *RedisAdapter) New(nsp socket.NamespaceInterface) socket.Adapter {
 	r.specificResponseChannel =
 		r.responseChannel + r.serverId + "#"
 
-	r.rdb.PSubscribe(r.ctx, r.channel+"*")
-	r.rdb.Subscribe(r.ctx,
-		r.requestChannel,
-		r.responseChannel,
-		r.specificResponseChannel,
-	)
-
-	// r.pubSub = r.rdb.Subscribe(r.ctx, r.subscribeGlobeKey())
 	r.redisListeners["psub"] = func(msg, channel string) {
 		r.onmessage(channel, msg)
 	}
@@ -45,9 +39,11 @@ func (r *RedisAdapter) New(nsp socket.NamespaceInterface) socket.Adapter {
 		r.onrequest(channel, msg)
 	}
 
-	psub := r.rdb.PSubscribe(r.ctx, r.channel) //  r.redisListeners["psub"]
+	psub := r.rdb.PSubscribe(r.ctx, r.channel+"*") //  r.redisListeners["psub"]
+	r.PSubs = append(r.PSubs, psub)
 	r.run("psub", psub)
 	sub := r.rdb.Subscribe(r.ctx, r.requestChannel, r.responseChannel, r.specificResponseChannel)
+	r.Subs = append(r.Subs, sub)
 	r.run("sub", sub)
 	return r
 }
@@ -66,15 +62,28 @@ func (r *RedisAdapter) Sids() *types.Map[socket.SocketId, *types.Set[socket.Room
 }
 
 func (r *RedisAdapter) Nsp() socket.NamespaceInterface {
-	return nil
+	return r.nsp
 }
 
 // To be overridden
-func (r *RedisAdapter) Close() {}
+func (r *RedisAdapter) Close() {
+
+	for _, c := range r.PSubs {
+		c.PUnsubscribe(r.ctx, r.channel+"*")
+	}
+
+	for _, c := range r.Subs {
+		c.Unsubscribe(r.ctx, r.requestChannel, r.responseChannel, r.specificResponseChannel)
+	}
+}
 
 // Returns the number of Socket.IO servers in the cluster
 // 每个server 都有自己的id，每次onmessage 时把 id带上，每次set 一下
-func (r *RedisAdapter) ServerCount() int64 { return 0 }
+func (r *RedisAdapter) ServerCount() int64 {
+	// PUBSUB(this.pubClient, "NUMSUB", this.requestChannel)
+	val := r.rdb.PubSubNumSub(r.ctx, "NUMSUB", r.requestChannel).Val()
+	return val["NUMSUB"]
+}
 
 // Adds a socket to a list of room.
 func (r *RedisAdapter) AddAll(socket.SocketId, *types.Set[socket.Room]) {}
@@ -100,7 +109,26 @@ func (r *RedisAdapter) GetBroadcast() func(*parser.Packet, *socket.BroadcastOpti
 //   - `Except` {*types.Set[Room]} sids that should be excluded
 //   - `Rooms` {*types.Set[Room]} list of rooms to broadcast to
 func (r *RedisAdapter) Broadcast(packet *parser.Packet, opts *socket.BroadcastOptions) {
-	r._broadcast(packet, opts)
+	packet.Nsp = r.Nsp().Name()
+	onlyLocal := false
+	if opts != nil && opts.Flags != nil && opts.Flags.Local {
+		onlyLocal = true
+	}
+	if !onlyLocal {
+		rawOpts := socket.BroadcastOptions{
+			Rooms:  (opts.Rooms),
+			Except: opts.Except,
+			Flags:  opts.Flags,
+		}
+		msg := r.parser.encode([]any{r.uid, packet, rawOpts})
+		channel := r.channel
+		if opts.Rooms.Len() == 1 {
+			channel += string(opts.Rooms.Keys()[0]) + "#"
+		}
+		r.rdb.Publish(r.ctx, channel, msg)
+	}
+	// super.broadcast(packet, opts);
+	r.nsp.Adapter().Broadcast(packet, opts)
 }
 
 // Broadcasts a packet and expects multiple acknowledgements.
@@ -109,7 +137,40 @@ func (r *RedisAdapter) Broadcast(packet *parser.Packet, opts *socket.BroadcastOp
 //   - `Flags` {*BroadcastFlags} flags for this packet
 //   - `Except` {*types.Set[Room]} sids that should be excluded
 //   - `Rooms` {*types.Set[Room]} list of rooms to broadcast to
-func (r *RedisAdapter) BroadcastWithAck(*parser.Packet, *socket.BroadcastOptions, func(uint64), func([]any, error)) {
+func (r *RedisAdapter) BroadcastWithAck(packet *parser.Packet, opts *socket.BroadcastOptions, clientCountCallback func(uint64), ack func([]any, error)) {
+	packet.Nsp = r.Nsp().Name()
+	onlyLocal := opts.Flags.Local
+	if !onlyLocal {
+		requestId := uuid.New().String()
+		rawOpts := socket.BroadcastOptions{
+			Rooms:  opts.Rooms,
+			Except: opts.Except,
+			Flags:  opts.Flags,
+		}
+		request := r.parser.encode(Request{
+			Uid:       r.uid,
+			RequestId: requestId,
+			Type:      BROADCAST,
+			Packet:    packet,
+			Opts:      &rawOpts,
+		})
+		r.rdb.Publish(r.ctx, r.requestChannel, request)
+		req := &ackRequest{
+			clientCountCallbackFun: clientCountCallback,
+			ackFun:                 ack,
+		}
+		r.ackRequests[requestId] = req
+	}
+
+	// @review
+	//   // we have no way to know at this level whether the server has received an acknowledgement from each client, so we
+	//   // will simply clean up the ackRequests map after the given delay
+	//   setTimeout(() => {
+	//     this.ackRequests.delete(requestId);
+	//   }, opts.flags!.timeout);
+	// }
+	r.nsp.Adapter().BroadcastWithAck(packet, opts, clientCountCallback, ack)
+	// super.broadcastWithAck(packet, opts, clientCountCallback, ack);
 }
 
 // Gets a list of sockets by sid.
@@ -123,25 +184,156 @@ func (r *RedisAdapter) SocketRooms(socket.SocketId) *types.Set[socket.Room] {
 }
 
 // Returns the matching socket instances
-func (r *RedisAdapter) FetchSockets(*socket.BroadcastOptions) func(func([]socket.SocketDetails, error)) {
-	return func(func([]socket.SocketDetails, error)) {}
+func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]socket.SocketDetails, error)) {
+	localSockets := r.nsp.Adapter().FetchSockets(opts)
+	if opts.Flags.Local {
+		return localSockets
+	}
+	numSub := r.ServerCount()
+	if numSub <= 1 {
+		return localSockets
+	}
+	requestId := uuid.New().String()
+	rawOpts := socket.BroadcastOptions{
+		Rooms:  opts.Rooms,
+		Except: opts.Except,
+	}
+	request := (Request{
+		Uid:       r.uid,
+		RequestId: requestId,
+		Type:      REMOTE_FETCH,
+		Opts:      &rawOpts,
+	})
+	return func(func([]socket.SocketDetails, error)) {
+		// @review
+		// const timeout = setTimeout(() => {
+		//     if (this.requests.has(requestId)) {
+		//       reject(
+		//         new Error("timeout reached while waiting for fetchSockets response")
+		//       );
+		//       this.requests.delete(requestId);
+		//     }
+		//   }, this.requestsTimeout);
+		r.requests[requestId] = &Request{
+			Type:     REMOTE_FETCH,
+			NumSub:   numSub,
+			MsgCount: 1,
+			Sockets:  localSockets,
+		}
+		r.rdb.Publish(r.ctx, r.requestChannel, request)
+	}
 }
 
 // Makes the matching socket instances join the specified rooms
-func (r *RedisAdapter) AddSockets(socket *socket.BroadcastOptions, room []socket.Room) {
+func (r *RedisAdapter) AddSockets(opts *socket.BroadcastOptions, rooms []socket.Room) {
+	if opts.Flags.Local {
+		r.nsp.Adapter().AddSockets(opts, rooms)
+		return
+	}
+	request := Request{
+		Uid:  r.uid,
+		Type: REMOTE_JOIN,
+		Opts: &socket.BroadcastOptions{
+			Rooms:  opts.Rooms,
+			Except: opts.Except,
+		},
+		Rooms: append(rooms),
+	}
+	r.rdb.Publish(r.ctx, r.requestChannel, request)
 }
 
 // Makes the matching socket instances leave the specified rooms
-func (r *RedisAdapter) DelSockets(*socket.BroadcastOptions, []socket.Room) {}
+func (r *RedisAdapter) DelSockets(opts *socket.BroadcastOptions, rooms []socket.Room) {
+	if opts.Flags.Local {
+		r.nsp.Adapter().DelSockets(opts, rooms)
+		return
+	}
+	request := Request{
+		Uid:  r.uid,
+		Type: REMOTE_LEAVE,
+		Opts: &socket.BroadcastOptions{
+			Rooms:  opts.Rooms,
+			Except: opts.Except,
+		},
+		Rooms: append(rooms),
+	}
+	r.rdb.Publish(r.ctx, r.requestChannel, request)
+}
 
 // Makes the matching socket instances disconnect
-func (r *RedisAdapter) DisconnectSockets(*socket.BroadcastOptions, bool) {}
+func (r *RedisAdapter) DisconnectSockets(opts *socket.BroadcastOptions, close bool) {
+	if opts.Flags.Local {
+		r.nsp.Adapter().DisconnectSockets(opts, close)
+		return
+	}
+	request := Request{
+		Uid:  r.uid,
+		Type: REMOTE_DISCONNECT,
+		Opts: &socket.BroadcastOptions{
+			Rooms:  opts.Rooms,
+			Except: opts.Except,
+		},
+		Close: close,
+	}
+	r.rdb.Publish(r.ctx, r.requestChannel, request)
+}
 
 // Send a packet to the other Socket.IO servers in the cluster
 // this is globe packet
-func (r *RedisAdapter) ServerSideEmit(packs []any) error {
+func (r *RedisAdapter) ServerSideEmit(packet []any) error {
 	// return r.rdb.Publish(r.ctx, r.subscribeGlobeKey(), string(b)).Err()
-	return nil
+	// const withAck = typeof packet[packet.length - 1] === "function";
+	_, ok := packet[len(packet)-1].(func([]any))
+	if ok {
+		return r.serverSideEmitWithAck(packet)
+	}
+	resquest := Request{
+		Uid:  r.uid,
+		Type: SERVER_SIDE_EMIT,
+		Data: packet,
+	}
+	return r.rdb.Publish(r.ctx, r.requestChannel, resquest).Err()
+}
+
+func (r *RedisAdapter) serverSideEmitWithAck(packet []any) error {
+	ack, ok := packet[len(packet)-1].(func(...any))
+	if !ok {
+		return errors.New("packet func err")
+	}
+	numSub := r.ServerCount() - 1
+	if numSub <= 0 {
+		ack(nil)
+		return nil
+	}
+
+	requestId := uuid.New().String()
+	request := Request{
+		Uid:       r.uid,
+		RequestId: requestId,
+		Type:      SERVER_SIDE_EMIT,
+		Data:      packet,
+	}
+	// @review
+	// const timeout = setTimeout(() => {
+	//   const storedRequest = this.requests.get(requestId);
+	//   if (storedRequest) {
+	//     ack(
+	//       new Error(
+	//         `timeout reached: only ${storedRequest.responses.length} responses received out of ${storedRequest.numSub}`
+	//       ),
+	//       storedRequest.responses
+	//     );
+	//     this.requests.delete(requestId);
+	//   }
+	// }, this.requestsTimeout);
+	r.requests[requestId] = &Request{
+		Type:    SERVER_SIDE_EMIT,
+		NumSub:  numSub,
+		Timeout: r.requestsTimeout,
+		Resolve: ack,
+	}
+	return r.rdb.Publish(r.ctx, r.requestChannel, request).Err()
+
 }
 
 // Save the client session in order to restore it upon reconnection.
@@ -258,7 +450,7 @@ func (r *RedisAdapter) onmessage(channel, msg string) {
 
 	args.Opts.Rooms = &types.Set[socket.Room]{}
 	args.Opts.Except = &types.Set[socket.Room]{}
-	r.Broadcast(&args.Packet, &args.Opts)
+	r.nsp.Adapter().Broadcast(&args.Packet, &args.Opts)
 	// super.broadcast(packet, opts);
 }
 
@@ -272,7 +464,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 		return
 	}
 	// let request;
-	request := subRequest{}
+	request := Request{}
 	if err := json.Unmarshal([]byte(msg), &request); err != nil {
 		log.Println(err)
 		return
@@ -461,7 +653,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 }
 
 func (r *RedisAdapter) onresponse(channel, msg string) {
-	response := subRequest{}
+	response := Request{}
 	if err := json.Unmarshal([]byte(msg), &response); err != nil {
 		return
 	}
@@ -473,7 +665,7 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 		case BROADCAST_CLIENT_COUNT:
 			ackRequest.clientCountCallback(response.ClientCount)
 		case BROADCAST_ACK:
-			ackRequest.ack(response.Packet)
+			ackRequest.ack([]any{response.Packet}, nil)
 		}
 		return
 	}
@@ -488,7 +680,7 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 		if response.Sockets == nil {
 			return
 		}
-		request.Sockets = append(request.Sockets, response.Sockets...)
+		request.Sockets = response.Sockets
 		if request.MsgCount == request.NumSub {
 			// clearTimeout(request.timeout)
 			if request.Resolve != nil {
@@ -520,7 +712,7 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 		delete(r.requests, (requestId))
 	case SERVER_SIDE_EMIT:
 		request.Responses = append(request.Responses, response.Packet.Data)
-		if len(request.Responses) == request.NumSub {
+		if int64(len(request.Responses)) == request.NumSub {
 			// clearTimeout(request.timeout);
 			if request.Resolve != nil {
 				request.Resolve(request.Responses...)
