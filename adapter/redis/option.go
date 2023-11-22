@@ -54,24 +54,7 @@ type Option func(*option)
 
 type SocketDataType int
 
-type Request struct {
-	Type      SocketDataType
-	Resolve   func(...any) // []socket.Socket []socket.Room,or []
-	Timeout   int
-	NumSub    int
-	MsgCount  int
-	Sockets   []socket.Socket
-	Rooms     []socket.Room
-	Responses []any
-	// [other: string]: any;
-}
-
 type friendlyErrorHandler func()
-
-type AckRequest interface {
-	clientCountCallback(clientCount int)
-	ack(args ...any)
-}
 
 // WithRedisAddress eg : 127.0.0.1:6379
 func WithRedisAddress(ads string) Option {
@@ -135,6 +118,9 @@ type RedisAdapter struct {
 	redisListeners          map[string](func(channel, msg string))
 	readonly                friendlyErrorHandler
 	parser                  Parser
+
+	Subs  []*redis.PubSub
+	PSubs []*redis.PubSub
 }
 
 func NewRedisAdapter(opts ...Option) (*RedisAdapter, error) {
@@ -191,15 +177,40 @@ type bindMessage struct {
 	Opts     socket.BroadcastOptions
 }
 
-type subRequest struct {
-	Uid         string                   `json:"uid"`
-	Sid         socket.SocketId          `json:"sid"`
-	Type        SocketDataType           `json:"type"`
-	RequestId   string                   `json:"request_id"`
-	Rooms       []socket.Room            `json:"rooms"`
-	Opts        *socket.BroadcastOptions `json:"opts"`
-	Close       bool                     `json:"close"`
-	Sockets     []socket.Socket          `json:"sockets"` // bool or []socket.Socket
-	Packet      *parser.Packet           `json:"packet"`
-	ClientCount int                      `json:"client_count"`
+type Request struct {
+	Uid         string                                    `json:"uid"`
+	Sid         socket.SocketId                           `json:"sid"`
+	Type        SocketDataType                            `json:"type"`
+	RequestId   string                                    `json:"request_id"`
+	Rooms       []socket.Room                             `json:"rooms"`
+	Opts        *socket.BroadcastOptions                  `json:"opts"`
+	Close       bool                                      `json:"close"`
+	Sockets     func(func([]socket.SocketDetails, error)) `json:"sockets"` // bool or []socket.Socket
+	Packet      *parser.Packet                            `json:"packet"`
+	ClientCount uint64                                    `json:"client_count"`
+
+	Resolve   func(...any) // []socket.Socket []socket.Room,or []
+	Timeout   int
+	NumSub    int64
+	MsgCount  int64
+	Responses []any
+	Data      any
+}
+
+type AckRequest interface {
+	clientCountCallback(clientCount uint64)
+	ack([]any, error)
+}
+
+type ackRequest struct {
+	clientCountCallbackFun func(clientCount uint64)
+	ackFun                 func([]any, error)
+}
+
+func (a *ackRequest) clientCountCallback(clientCount uint64) {
+	a.clientCountCallbackFun(clientCount)
+}
+
+func (a *ackRequest) ack(da []any, err error) {
+	a.ackFun(da, err)
 }
