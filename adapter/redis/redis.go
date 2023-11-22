@@ -52,13 +52,11 @@ func (r *RedisAdapter) Init() {
 }
 
 func (r *RedisAdapter) Rooms() *types.Map[socket.Room, *types.Set[socket.SocketId]] {
-	// rm := &types.Map[socket.Room, *types.Set[socket.SocketId]]{}
-	// rm.Store()
-	return &types.Map[socket.Room, *types.Set[socket.SocketId]]{}
+	return r.nsp.Adapter().Rooms()
 }
 
 func (r *RedisAdapter) Sids() *types.Map[socket.SocketId, *types.Set[socket.Room]] {
-	return &types.Map[socket.SocketId, *types.Set[socket.Room]]{}
+	return r.nsp.Adapter().Sids()
 }
 
 func (r *RedisAdapter) Nsp() socket.NamespaceInterface {
@@ -86,13 +84,19 @@ func (r *RedisAdapter) ServerCount() int64 {
 }
 
 // Adds a socket to a list of room.
-func (r *RedisAdapter) AddAll(socket.SocketId, *types.Set[socket.Room]) {}
+func (r *RedisAdapter) AddAll(id socket.SocketId, room *types.Set[socket.Room]) {
+	r.nsp.Adapter().AddAll(id, room)
+}
 
 // Removes a socket from a room.
-func (r *RedisAdapter) Del(socket.SocketId, socket.Room) {}
+func (r *RedisAdapter) Del(id socket.SocketId, room socket.Room) {
+	r.nsp.Adapter().Del(id, room)
+}
 
 // Removes a socket from all rooms it's joined.
-func (r *RedisAdapter) DelAll(socket.SocketId) {}
+func (r *RedisAdapter) DelAll(id socket.SocketId) {
+	r.nsp.Adapter().DelAll(id)
+}
 
 func (r *RedisAdapter) SetBroadcast(broadcast func(*parser.Packet, *socket.BroadcastOptions)) {
 	r._broadcast = broadcast
@@ -174,13 +178,13 @@ func (r *RedisAdapter) BroadcastWithAck(packet *parser.Packet, opts *socket.Broa
 }
 
 // Gets a list of sockets by sid.
-func (r *RedisAdapter) Sockets(*types.Set[socket.Room]) *types.Set[socket.SocketId] {
-	return &types.Set[socket.SocketId]{}
+func (r *RedisAdapter) Sockets(room *types.Set[socket.Room]) *types.Set[socket.SocketId] {
+	return r.nsp.Adapter().Sockets(room)
 }
 
 // Gets the list of rooms a given socket has joined.
-func (r *RedisAdapter) SocketRooms(socket.SocketId) *types.Set[socket.Room] {
-	return &types.Set[socket.Room]{}
+func (r *RedisAdapter) SocketRooms(id socket.SocketId) *types.Set[socket.Room] {
+	return r.nsp.Adapter().SocketRooms(id)
 }
 
 // Returns the matching socket instances
@@ -237,7 +241,7 @@ func (r *RedisAdapter) AddSockets(opts *socket.BroadcastOptions, rooms []socket.
 			Rooms:  opts.Rooms,
 			Except: opts.Except,
 		},
-		Rooms: append(rooms),
+		Rooms: (rooms),
 	}
 	r.rdb.Publish(r.ctx, r.requestChannel, request)
 }
@@ -255,7 +259,7 @@ func (r *RedisAdapter) DelSockets(opts *socket.BroadcastOptions, rooms []socket.
 			Rooms:  opts.Rooms,
 			Except: opts.Except,
 		},
-		Rooms: append(rooms),
+		Rooms: (rooms),
 	}
 	r.rdb.Publish(r.ctx, r.requestChannel, request)
 }
@@ -281,8 +285,6 @@ func (r *RedisAdapter) DisconnectSockets(opts *socket.BroadcastOptions, close bo
 // Send a packet to the other Socket.IO servers in the cluster
 // this is globe packet
 func (r *RedisAdapter) ServerSideEmit(packet []any) error {
-	// return r.rdb.Publish(r.ctx, r.subscribeGlobeKey(), string(b)).Err()
-	// const withAck = typeof packet[packet.length - 1] === "function";
 	_, ok := packet[len(packet)-1].(func([]any))
 	if ok {
 		return r.serverSideEmitWithAck(packet)
@@ -337,11 +339,13 @@ func (r *RedisAdapter) serverSideEmitWithAck(packet []any) error {
 }
 
 // Save the client session in order to restore it upon reconnection.
-func (r *RedisAdapter) PersistSession(*socket.SessionToPersist) {}
+func (r *RedisAdapter) PersistSession(s *socket.SessionToPersist) {
+	r.nsp.Adapter().PersistSession(s)
+}
 
 // Restore the session and find the packets that were missed by the client.
-func (r *RedisAdapter) RestoreSession(socket.PrivateSessionId, string) (*socket.Session, error) {
-	return nil, nil
+func (r *RedisAdapter) RestoreSession(id socket.PrivateSessionId, pack string) (*socket.Session, error) {
+	return r.nsp.Adapter().RestoreSession(id, pack)
 }
 
 // Broadcasts a packet.
