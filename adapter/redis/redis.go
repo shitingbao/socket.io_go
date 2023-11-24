@@ -73,6 +73,7 @@ func (r *RedisAdapter) Close() {
 	for _, c := range r.Subs {
 		c.Unsubscribe(r.ctx, r.requestChannel, r.responseChannel, r.specificResponseChannel)
 	}
+	r.task.Close()
 }
 
 // Returns the number of Socket.IO servers in the cluster
@@ -131,7 +132,6 @@ func (r *RedisAdapter) Broadcast(packet *parser.Packet, opts *socket.BroadcastOp
 		}
 		r.rdb.Publish(r.ctx, channel, msg)
 	}
-	// super.broadcast(packet, opts);
 	r.nsp.Adapter().Broadcast(packet, opts)
 }
 
@@ -144,8 +144,8 @@ func (r *RedisAdapter) Broadcast(packet *parser.Packet, opts *socket.BroadcastOp
 func (r *RedisAdapter) BroadcastWithAck(packet *parser.Packet, opts *socket.BroadcastOptions, clientCountCallback func(uint64), ack func([]any, error)) {
 	packet.Nsp = r.Nsp().Name()
 	onlyLocal := opts.Flags.Local
+	requestId := uuid.New().String()
 	if !onlyLocal {
-		requestId := uuid.New().String()
 		rawOpts := socket.BroadcastOptions{
 			Rooms:  opts.Rooms,
 			Except: opts.Except,
@@ -165,16 +165,8 @@ func (r *RedisAdapter) BroadcastWithAck(packet *parser.Packet, opts *socket.Broa
 		}
 		r.ackRequests[requestId] = req
 	}
-
-	// @review
-	//   // we have no way to know at this level whether the server has received an acknowledgement from each client, so we
-	//   // will simply clean up the ackRequests map after the given delay
-	//   setTimeout(() => {
-	//     this.ackRequests.delete(requestId);
-	//   }, opts.flags!.timeout);
-	// }
+	r.task.Set(int(*opts.Flags.Timeout), func() { delete(r.ackRequests, requestId) })
 	r.nsp.Adapter().BroadcastWithAck(packet, opts, clientCountCallback, ack)
-	// super.broadcastWithAck(packet, opts, clientCountCallback, ack);
 }
 
 // Gets a list of sockets by sid.
@@ -209,20 +201,17 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 		Opts:      &rawOpts,
 	})
 	return func(func([]socket.SocketDetails, error)) {
-		// @review
-		// const timeout = setTimeout(() => {
-		//     if (this.requests.has(requestId)) {
-		//       reject(
-		//         new Error("timeout reached while waiting for fetchSockets response")
-		//       );
-		//       this.requests.delete(requestId);
-		//     }
-		//   }, this.requestsTimeout);
+		timeoutId := r.task.Set(r.requestsTimeout, func() {
+			if r.requests[requestId] != nil {
+				delete(r.requests, requestId)
+			}
+		})
 		r.requests[requestId] = &Request{
-			Type:     REMOTE_FETCH,
-			NumSub:   numSub,
-			MsgCount: 1,
-			Sockets:  localSockets,
+			Type:      REMOTE_FETCH,
+			NumSub:    numSub,
+			TimeoutId: timeoutId,
+			MsgCount:  1,
+			Sockets:   localSockets,
 		}
 		r.rdb.Publish(r.ctx, r.requestChannel, request)
 	}
@@ -315,24 +304,19 @@ func (r *RedisAdapter) serverSideEmitWithAck(packet []any) error {
 		Type:      SERVER_SIDE_EMIT,
 		Data:      packet,
 	}
-	// @review
-	// const timeout = setTimeout(() => {
-	//   const storedRequest = this.requests.get(requestId);
-	//   if (storedRequest) {
-	//     ack(
-	//       new Error(
-	//         `timeout reached: only ${storedRequest.responses.length} responses received out of ${storedRequest.numSub}`
-	//       ),
-	//       storedRequest.responses
-	//     );
-	//     this.requests.delete(requestId);
-	//   }
-	// }, this.requestsTimeout);
+	timeoutId := r.task.Set(r.requestsTimeout, func() {
+		storeRequest := r.requests[requestId]
+		if storeRequest != nil {
+			ack(errors.New("timeout reached"), storeRequest.Responses)
+		}
+		delete(r.requests, requestId)
+	})
+
 	r.requests[requestId] = &Request{
-		Type:    SERVER_SIDE_EMIT,
-		NumSub:  numSub,
-		Timeout: r.requestsTimeout,
-		Resolve: ack,
+		Type:      SERVER_SIDE_EMIT,
+		NumSub:    numSub,
+		TimeoutId: timeoutId,
+		Resolve:   ack,
 	}
 	return r.rdb.Publish(r.ctx, r.requestChannel, request).Err()
 
@@ -455,7 +439,6 @@ func (r *RedisAdapter) onmessage(channel, msg string) {
 	args.Opts.Rooms = &types.Set[socket.Room]{}
 	args.Opts.Except = &types.Set[socket.Room]{}
 	r.nsp.Adapter().Broadcast(&args.Packet, &args.Opts)
-	// super.broadcast(packet, opts);
 }
 
 func (r *RedisAdapter) onrequest(channel, msg string) {
@@ -686,7 +669,7 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 		}
 		request.Sockets = response.Sockets
 		if request.MsgCount == request.NumSub {
-			// clearTimeout(request.timeout)
+			r.task.Clear(request.TimeoutId)
 			if request.Resolve != nil {
 				request.Resolve(request.Sockets)
 			}
@@ -699,7 +682,7 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 		}
 		request.Rooms = append(request.Rooms, response.Rooms...)
 		if request.MsgCount == request.NumSub {
-			// clearTimeout(request.timeout)
+			r.task.Clear(request.TimeoutId)
 			if request.Resolve != nil {
 				request.Resolve(request.Rooms)
 			}
@@ -709,7 +692,7 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 	case REMOTE_JOIN:
 	case REMOTE_LEAVE:
 	case REMOTE_DISCONNECT:
-		//  clearTimeout(request.timeout);
+		r.task.Clear(request.TimeoutId)
 		if request.Resolve != nil {
 			request.Resolve()
 		}
@@ -717,7 +700,7 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 	case SERVER_SIDE_EMIT:
 		request.Responses = append(request.Responses, response.Packet.Data)
 		if int64(len(request.Responses)) == request.NumSub {
-			// clearTimeout(request.timeout);
+			r.task.Clear(request.TimeoutId)
 			if request.Resolve != nil {
 				request.Resolve(request.Responses...)
 			}
