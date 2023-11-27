@@ -99,6 +99,7 @@ type RedisAdapter struct {
 	rdb *redis.Client
 	ctx context.Context
 
+	adapter socket.Adapter
 	nsp     socket.NamespaceInterface
 	rooms   *types.Map[socket.Room, *types.Set[socket.SocketId]]
 	sids    *types.Map[socket.SocketId, *types.Set[socket.Room]]

@@ -56,7 +56,6 @@ func ExampleRedisAdapterNode() {
 	})
 	sock := io.ServeHandler(nil)
 
-	// g.Use(cross)
 	g.GET("/socket.io/", gin.WrapH(sock))
 	g.POST("/socket.io/", gin.WrapH(sock))
 	g.Run(":8000")
