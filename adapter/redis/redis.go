@@ -165,7 +165,7 @@ func (r *RedisAdapter) BroadcastWithAck(packet *parser.Packet, opts *socket.Broa
 		}
 		r.ackRequests[requestId] = req
 	}
-	r.task.Set(int(*opts.Flags.Timeout), func() { delete(r.ackRequests, requestId) })
+	r.task.Set(*(opts.Flags.Timeout), func() { delete(r.ackRequests, requestId) })
 	r.nsp.Adapter().BroadcastWithAck(packet, opts, clientCountCallback, ack)
 }
 
@@ -569,10 +569,10 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 			return
 		}
 
-		withAck := request.RequestId
-		if withAck != "" {
-			// r.nsp.EmitUntyped()
-		}
+		// withAck := request.RequestId
+		// if withAck != "" {
+		// 	// r.nsp.EmitUntyped()
+		// }
 		// if (request.uid === this.uid) {
 		//   debug("ignore same uid");
 		//   return;
@@ -635,7 +635,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 			})
 		}
 	default:
-		log.Printf("ignoring unknown request type: %s", request.Type)
+		log.Println("ignoring unknown request type: ", request.Type)
 	}
 }
 
@@ -707,7 +707,7 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 			delete(r.requests, requestId)
 		}
 	default:
-		log.Println("ignoring unknown request type: %s", request.Type)
+		log.Println("ignoring unknown request type: ", request.Type)
 	}
 }
 

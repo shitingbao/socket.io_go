@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"time"
 
 	"github.com/pborman/uuid"
 	"github.com/redis/go-redis/v9"
@@ -46,7 +47,7 @@ type option struct {
 	Db                               int
 	HeartbeatInterval                int
 	HeartbeatTimeout                 int
-	RequestsTimeout                  int
+	RequestsTimeout                  time.Duration
 	PublishOnSpecificResponseChannel bool
 }
 
@@ -105,7 +106,7 @@ type RedisAdapter struct {
 
 	_broadcast func(*parser.Packet, *socket.BroadcastOptions)
 
-	requestsTimeout                  int
+	requestsTimeout                  time.Duration
 	publishOnSpecificResponseChannel bool
 
 	uid                     string // only uid
