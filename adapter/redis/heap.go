@@ -54,10 +54,26 @@ func NewMaxHeap(list []timePart) (*MaxHeap, error) {
 	return &MaxHeap{h}, nil
 }
 
-func NewMinHeap(l []timePart) (*MinHeap, error) {
+func NewMinHeap(l ...timePart) (*MinHeap, error) {
 	h := &heap{symbol: false, list: make([]timePart, len(l)), lock: NewSpinLock()}
 	h.construct(l)
 	return &MinHeap{h}, nil
+}
+
+// timePartIds
+func (h *heap) Delete(list ...string) {
+	h.lock.Lock()
+	defer h.lock.Unlock()
+	m := make(map[string]bool)
+	for _, k := range list {
+		m[k] = true
+	}
+	for i, v := range h.List() {
+		if m[v.Key] {
+			h.list = append(h.list[0:i], h.list[i+1:]...)
+		}
+	}
+	h.construct(h.list)
 }
 
 func (h *heap) construct(list []timePart) {
