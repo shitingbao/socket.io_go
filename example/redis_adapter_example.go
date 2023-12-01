@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/zishang520/socket.io/v2/adapter/redis"
@@ -14,13 +15,28 @@ import (
 // to ensure that nodes in the system can discover each other.
 var serverName = "redisAdapterTest"
 
+func cross(ctx *gin.Context) {
+	origin := ctx.Request.Header.Get("Origin")
+	ctx.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+	// ctx.Header("Access-Control-Allow-Origin", "http://localhost:3001,http://localhost:3000")
+	ctx.Header("Access-Control-Allow-Headers", "Content-Type,AccessToken,X-CSRF-Token, Authorization,x-device-sn,x-device-token")
+	ctx.Header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+	ctx.Header("Access-Control-Expose-Headers", "Content-Length, Access-Control-Allow-Origin, Access-Control-Allow-Headers, Content-Type,x-device-sn")
+	ctx.Header("Access-Control-Allow-Credentials", "true")
+	if ctx.Request.Method == "OPTIONS" {
+		ctx.JSON(http.StatusOK, "ok")
+		return
+	}
+	ctx.Next()
+}
+
 func ExampleRedisAdapter() {
 	// one node
 	// go OtherNodeExampleRedisAdapter()
 
 	// two node
-	ExampleRedisAdapterNode()
-
+	go ExampleRedisAdapterNode()
+	OtherNodeExampleRedisAdapter()
 	// ...
 	// ...
 	// other node
@@ -43,19 +59,39 @@ func ExampleRedisAdapterNode() {
 		return
 	}
 	io.SetAdapter(rdsAdapter)
-	io.Of("/user", nil).On("connection", func(clients ...any) {
+	io.Of("/", nil).On("connection", func(clients ...any) {
 		log.Println("connect")
 		client := clients[0].(*socket.Socket)
 		client.On("ping", func(datas ...any) {
 			log.Println("heart")
 			client.Emit("pong", "pong")
 		})
+		client.On("join-room", func(datas ...any) {
+			das, ok := datas[0].(string)
+			if !ok {
+				client.Emit("error", "data err")
+				return
+			}
+			client.Join(socket.Room(das))
+			fs := io.FetchSockets()
+			fs(func(sks []*socket.RemoteSocket, err error) {
+				for _, sck := range sks {
+					log.Println("id=:", sck.Id(), err)
+					log.Println("rooms=:", sck.Rooms(), err)
+					log.Println("Handshake=:", sck.Handshake().Query, err)
+				}
+			})
+			log.Println("join-room:", datas)
+			client.Emit("join-room", "pong")
+		})
+
 		client.On("disconnect", func(...any) {
 			log.Println("disconnect")
 		})
 	})
 	sock := io.ServeHandler(nil)
 
+	g.Use(cross)
 	g.GET("/socket.io/", gin.WrapH(sock))
 	g.POST("/socket.io/", gin.WrapH(sock))
 	g.Run(":8000")
@@ -66,6 +102,9 @@ func ExampleRedisAdapterNode() {
 // redisAdapterTest is my example serverName
 func OtherNodeExampleRedisAdapter() {
 	g := gin.Default()
+
+	// srv is listen's address or http server
+	// opts *ServerOptions
 	io := socket.NewServer(nil, nil)
 
 	rdsAdapter, err := redis.NewRedisAdapter(
@@ -76,21 +115,39 @@ func OtherNodeExampleRedisAdapter() {
 		return
 	}
 	io.SetAdapter(rdsAdapter)
-	io.Of("/user", nil).On("connection", func(clients ...any) {
+	io.Of("/", nil).On("connection", func(clients ...any) {
 		log.Println("connect")
-		socket := clients[0].(*socket.Socket)
-		socket.On("ping", func(datas ...any) {
+		client := clients[0].(*socket.Socket)
+		client.On("ping", func(datas ...any) {
 			log.Println("heart")
-			socket.Emit("pong", "pong")
-			socket.Join("")
+			client.Emit("pong", "pong")
 		})
-		socket.On("disconnect", func(...any) {
+		client.On("join-room", func(datas ...any) {
+			das, ok := datas[0].(string)
+			if !ok {
+				client.Emit("error", "data err")
+				return
+			}
+			client.Join(socket.Room(das))
+			fs := io.FetchSockets()
+			fs(func(sks []*socket.RemoteSocket, err error) {
+				for _, sck := range sks {
+					log.Println("8001 id=:", sck.Id(), err)
+					log.Println("8001 rooms=:", sck.Rooms(), err)
+					log.Println("8001 Handshake=:", sck.Handshake().Query, err)
+				}
+			})
+			log.Println("join-room:", datas)
+			client.Emit("join-room", "pong")
+		})
+
+		client.On("disconnect", func(...any) {
 			log.Println("disconnect")
 		})
 	})
 	sock := io.ServeHandler(nil)
 
-	// g.Use(cross)
+	g.Use(cross)
 	g.GET("/socket.io/", gin.WrapH(sock))
 	g.POST("/socket.io/", gin.WrapH(sock))
 	g.Run(":8001")
