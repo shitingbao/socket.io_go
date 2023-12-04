@@ -16,9 +16,17 @@ import (
 var serverName = "redisAdapterTest"
 
 func cross(ctx *gin.Context) {
+	// 白名单自定义
+	allowedOrigins := []string{"http://192.168.31.33:3001", "http://192.168.31.33:3000"}
 	origin := ctx.Request.Header.Get("Origin")
-	ctx.Writer.Header().Set("Access-Control-Allow-Origin", origin)
-	// ctx.Header("Access-Control-Allow-Origin", "http://localhost:3001,http://localhost:3000")
+	// log.Println("origin=:", origin, " Referer:", ctx.Request.Referer()) origin or Referer
+	for _, allowedOrigin := range allowedOrigins {
+		if origin == allowedOrigin {
+			ctx.Writer.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+			break
+		}
+	}
+
 	ctx.Header("Access-Control-Allow-Headers", "Content-Type,AccessToken,X-CSRF-Token, Authorization,x-device-sn,x-device-token")
 	ctx.Header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
 	ctx.Header("Access-Control-Expose-Headers", "Content-Length, Access-Control-Allow-Origin, Access-Control-Allow-Headers, Content-Type,x-device-sn")
