@@ -43,16 +43,22 @@ func ExampleRedisAdapter() {
 	// go OtherNodeExampleRedisAdapter()
 
 	// two node
-	go ExampleRedisAdapterNode()
-	OtherNodeExampleRedisAdapter()
+	// go ExampleRedisAdapterNode(":8000")
+
+	// the other node
+	// these node can can discover each other in redisAdapterTest's system
+	// redisAdapterTest is my example serverName
+	// go ExampleRedisAdapterNode(":8001")
 	// ...
 	// ...
 	// other node
+	ExampleRedisAdapterNode(":8000")
+	//
 	// ...
 	// ...
 }
 
-func ExampleRedisAdapterNode() {
+func ExampleRedisAdapterNode(address string) {
 	g := gin.Default()
 
 	// srv is listen's address or http server
@@ -81,15 +87,15 @@ func ExampleRedisAdapterNode() {
 				return
 			}
 			client.Join(socket.Room(das))
+			// fs := client.Nsp().FetchSockets()
 			fs := io.FetchSockets()
+			ids := []socket.SocketId{}
 			fs(func(sks []*socket.RemoteSocket, err error) {
 				for _, sck := range sks {
-					log.Println("id=:", sck.Id(), err)
-					log.Println("rooms=:", sck.Rooms(), err)
-					log.Println("Handshake=:", sck.Handshake().Query, err)
+					ids = append(ids, sck.Id())
 				}
 			})
-			log.Println("join-room:", datas)
+			log.Println("join-room:", ids)
 			client.Emit("join-room", "pong")
 		})
 
@@ -102,61 +108,5 @@ func ExampleRedisAdapterNode() {
 	g.Use(cross)
 	g.GET("/socket.io/", gin.WrapH(sock))
 	g.POST("/socket.io/", gin.WrapH(sock))
-	g.Run(":8000")
-}
-
-// the other node
-// these node can can discover each other in redisAdapterTest's system
-// redisAdapterTest is my example serverName
-func OtherNodeExampleRedisAdapter() {
-	g := gin.Default()
-
-	// srv is listen's address or http server
-	// opts *ServerOptions
-	io := socket.NewServer(nil, nil)
-
-	rdsAdapter, err := redis.NewRedisAdapter(
-		redis.WithRedisAddress("127.0.0.1:6379"),
-	)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	io.SetAdapter(rdsAdapter)
-	io.Of("/", nil).On("connection", func(clients ...any) {
-		log.Println("connect")
-		client := clients[0].(*socket.Socket)
-		client.On("ping", func(datas ...any) {
-			log.Println("heart")
-			client.Emit("pong", "pong")
-		})
-		client.On("join-room", func(datas ...any) {
-			das, ok := datas[0].(string)
-			if !ok {
-				client.Emit("error", "data err")
-				return
-			}
-			client.Join(socket.Room(das))
-			fs := io.FetchSockets()
-			fs(func(sks []*socket.RemoteSocket, err error) {
-				for _, sck := range sks {
-					log.Println("8001 id=:", sck.Id(), err)
-					log.Println("8001 rooms=:", sck.Rooms(), err)
-					log.Println("8001 Handshake=:", sck.Handshake().Query, err)
-				}
-			})
-			log.Println("join-room:", datas)
-			client.Emit("join-room", "pong")
-		})
-
-		client.On("disconnect", func(...any) {
-			log.Println("disconnect")
-		})
-	})
-	sock := io.ServeHandler(nil)
-
-	g.Use(cross)
-	g.GET("/socket.io/", gin.WrapH(sock))
-	g.POST("/socket.io/", gin.WrapH(sock))
-	g.Run(":8001")
+	g.Run(address)
 }

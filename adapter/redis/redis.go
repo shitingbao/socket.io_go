@@ -25,7 +25,7 @@ func (r *RedisAdapter) New(nsp socket.NamespaceInterface) socket.Adapter {
 	r.encoder = nsp.Server().Encoder()
 	r._broadcast = r.broadcast
 
-	prefix := r.serverId + "socket.io"
+	prefix := "socket.io"
 	r.channel = prefix + "#" + nsp.Name() + "#"
 	r.requestChannel = prefix + "-request#" + nsp.Name() + "#"
 	r.responseChannel = prefix + "-response#" + nsp.Name() + "#"
@@ -78,16 +78,24 @@ func (r *RedisAdapter) Close() {
 }
 
 // Returns the number of Socket.IO servers in the cluster
-// 每个server 都有自己的id，每次onmessage 时把 id带上，每次set 一下
+// Number of subscriptions to requestChannel
 func (r *RedisAdapter) ServerCount() int64 {
-	// PUBSUB(this.pubClient, "NUMSUB", this.requestChannel)
-	val := r.rdb.PubSubNumSub(r.ctx, "NUMSUB", r.requestChannel).Val()
-	return val["NUMSUB"]
+	val := r.rdb.PubSubNumSub(r.ctx, r.requestChannel).Val()
+	return val[r.requestChannel]
 }
 
 // Adds a socket to a list of room.
-func (r *RedisAdapter) AddAll(id socket.SocketId, room *types.Set[socket.Room]) {
-	r.adapter.AddAll(id, room)
+func (r *RedisAdapter) AddAll(id socket.SocketId, rooms *types.Set[socket.Room]) {
+	r.adapter.AddAll(id, rooms)
+	request := Request{
+		Uid:  r.uid,
+		Type: REMOTE_JOIN,
+		Opts: &socket.BroadcastOptions{
+			Rooms: rooms,
+		},
+		Rooms: rooms.Keys(),
+	}
+	r.rdb.Publish(r.ctx, r.requestChannel, request)
 }
 
 // Removes a socket from a room.
@@ -201,7 +209,7 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 		Type:      REMOTE_FETCH,
 		Opts:      &rawOpts,
 	})
-	return func(func([]socket.SocketDetails, error)) {
+	return func(f func(sockets []socket.SocketDetails, err error)) {
 		timeoutId := r.task.Set(r.requestsTimeout, func() {
 			if r.requests[requestId] != nil {
 				delete(r.requests, requestId)
@@ -215,6 +223,11 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 			Sockets:   localSockets,
 		}
 		r.rdb.Publish(r.ctx, r.requestChannel, request)
+		sockets := []socket.SocketDetails{}
+		r.apply(opts, func(socket *socket.Socket) {
+			sockets = append(sockets, socket)
+		})
+		f(sockets, nil)
 	}
 }
 
@@ -551,7 +564,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 			Data      any
 		}
 		datas := []responseData{}
-		fech := r.FetchSockets(request.Opts)
+		localSockets := r.adapter.FetchSockets(request.Opts)
 		socketFetch := func(sockets []socket.SocketDetails, err error) {
 			for _, sock := range sockets {
 				da := responseData{
@@ -563,7 +576,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 				datas = append(datas, da)
 			}
 		}
-		fech(socketFetch)
+		localSockets(socketFetch)
 		r.publishResponse(request.RequestId, datas)
 	case SERVER_SIDE_EMIT:
 		if request.Uid == r.uid {
