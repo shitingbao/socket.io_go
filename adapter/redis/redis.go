@@ -198,6 +198,10 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 	if numSub <= 1 {
 		return localSockets
 	}
+	lsockets := []socket.SocketDetails{}
+	localSockets(func(sds []socket.SocketDetails, err error) {
+		lsockets = append(lsockets, sds...)
+	})
 	requestId := uuid.New().String()
 	rawOpts := socket.BroadcastOptions{
 		Rooms:  opts.Rooms,
@@ -220,7 +224,7 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 			NumSub:    numSub,
 			TimeoutId: timeoutId,
 			MsgCount:  1,
-			Sockets:   localSockets,
+			Sockets:   lsockets,
 		}
 		r.rdb.Publish(r.ctx, r.requestChannel, request)
 		sockets := []socket.SocketDetails{}
@@ -673,7 +677,7 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 	if requestId == "" || !(r.requests[requestId] != nil || r.ackRequests[requestId] != nil) {
 		return
 	}
-	request := r.requests[requestId]
+	request := r.requests[requestId] // Store everything obtained in this request, and delete it after all is obtained.
 	switch request.Type {
 	case SOCKETS:
 	case REMOTE_FETCH:
@@ -682,7 +686,12 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 			return
 		}
 		request.Sockets = response.Sockets
-		if request.MsgCount == request.NumSub {
+
+		if request.Type == SOCKETS {
+			request.Sockets = append(request.Sockets, response.Sockets...)
+		}
+		// response.Sockets(func([]socket.SocketDetails, error) {})
+		if request.MsgCount == request.NumSub { // NumSub is the number of service nodes
 			r.task.Clear(request.TimeoutId)
 			if request.Resolve != nil {
 				request.Resolve(request.Sockets)

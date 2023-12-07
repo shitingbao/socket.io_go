@@ -184,16 +184,16 @@ type bindMessage struct {
 }
 
 type Request struct {
-	Uid         string                                    `json:"uid"`
-	Sid         socket.SocketId                           `json:"sid"`
-	Type        SocketDataType                            `json:"type"`
-	RequestId   string                                    `json:"request_id"`
-	Rooms       []socket.Room                             `json:"rooms"`
-	Opts        *socket.BroadcastOptions                  `json:"opts"`
-	Close       bool                                      `json:"close"`
-	Sockets     func(func([]socket.SocketDetails, error)) `json:"sockets"` // bool or []socket.Socket
-	Packet      *parser.Packet                            `json:"packet"`
-	ClientCount uint64                                    `json:"client_count"`
+	Uid         string                   `json:"uid"`
+	Sid         socket.SocketId          `json:"sid"`
+	Type        SocketDataType           `json:"type"`
+	RequestId   string                   `json:"request_id"`
+	Rooms       []socket.Room            `json:"rooms"`
+	Opts        *socket.BroadcastOptions `json:"opts"`
+	Close       bool                     `json:"close"`
+	Sockets     []socket.SocketDetails   `json:"sockets"` // bool or []socket.Socket
+	Packet      *parser.Packet           `json:"packet"`
+	ClientCount uint64                   `json:"client_count"`
 
 	Resolve   func(...any) // []socket.Socket []socket.Room,or []
 	TimeoutId string       // socket timeout key,use when(delete socket by request id)
