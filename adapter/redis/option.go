@@ -195,8 +195,8 @@ type Request struct {
 	Packet      *parser.Packet           `json:"packet"`
 	ClientCount uint64                   `json:"client_count"`
 
-	Resolve   func(...any) // []socket.Socket []socket.Room,or []
-	TimeoutId string       // socket timeout key,use when(delete socket by request id)
+	// Resolve   func(...any) // []socket.Socket []socket.Room,or []
+	TimeoutId string // socket timeout key,use when(delete socket by request id)
 	NumSub    int64
 	MsgCount  int64
 	Responses []any

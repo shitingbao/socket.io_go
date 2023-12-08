@@ -334,7 +334,7 @@ func (r *RedisAdapter) serverSideEmitWithAck(packet []any) error {
 		Type:      SERVER_SIDE_EMIT,
 		NumSub:    numSub,
 		TimeoutId: timeoutId,
-		Resolve:   ack,
+		// Resolve:   ack,
 	}
 	return r.rdb.Publish(r.ctx, r.requestChannel, request).Err()
 
@@ -685,17 +685,13 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 		if response.Sockets == nil {
 			return
 		}
-		request.Sockets = response.Sockets
-
-		if request.Type == SOCKETS {
-			request.Sockets = append(request.Sockets, response.Sockets...)
-		}
-		// response.Sockets(func([]socket.SocketDetails, error) {})
+		request.Sockets = append(request.Sockets, response.Sockets...)
 		if request.MsgCount == request.NumSub { // NumSub is the number of service nodes
 			r.task.Clear(request.TimeoutId)
-			if request.Resolve != nil {
-				request.Resolve(request.Sockets)
-			}
+			// @review
+			// if request.Resolve != nil {
+			// 	request.Resolve(request.Sockets)
+			// }
 			delete(r.requests, requestId)
 		}
 	case ALL_ROOMS:
@@ -706,9 +702,10 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 		request.Rooms = append(request.Rooms, response.Rooms...)
 		if request.MsgCount == request.NumSub {
 			r.task.Clear(request.TimeoutId)
-			if request.Resolve != nil {
-				request.Resolve(request.Rooms)
-			}
+			// @review
+			// if request.Resolve != nil {
+			// 	request.Resolve(request.Rooms)
+			// }
 			delete(r.requests, requestId)
 		}
 
@@ -716,17 +713,19 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 	case REMOTE_LEAVE:
 	case REMOTE_DISCONNECT:
 		r.task.Clear(request.TimeoutId)
-		if request.Resolve != nil {
-			request.Resolve()
-		}
+		// @review
+		// if request.Resolve != nil {
+		// 	request.Resolve()
+		// }
 		delete(r.requests, (requestId))
 	case SERVER_SIDE_EMIT:
 		request.Responses = append(request.Responses, response.Packet.Data)
 		if int64(len(request.Responses)) == request.NumSub {
 			r.task.Clear(request.TimeoutId)
-			if request.Resolve != nil {
-				request.Resolve(request.Responses...)
-			}
+			// @review
+			// if request.Resolve != nil {
+			// 	request.Resolve(request.Responses...)
+			// }
 			delete(r.requests, requestId)
 		}
 	default:
