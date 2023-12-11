@@ -115,7 +115,7 @@ type RedisAdapter struct {
 	requestChannel          string
 	responseChannel         string
 	specificResponseChannel string
-	requests                map[string]*Request
+	requests                map[string]*HandMessage
 	ackRequests             map[string]AckRequest
 	redisListeners          map[string](func(channel, msg string))
 	readonly                friendlyErrorHandler
@@ -157,7 +157,7 @@ func NewRedisAdapter(opts ...Option) (*RedisAdapter, error) {
 		requestsTimeout:                  op.RequestsTimeout,
 		publishOnSpecificResponseChannel: op.PublishOnSpecificResponseChannel,
 
-		requests:       make(map[string]*Request),
+		requests:       make(map[string]*HandMessage),
 		ackRequests:    make(map[string]AckRequest),
 		redisListeners: make(map[string](func(string, string))),
 		readonly:       func() {},
@@ -183,17 +183,18 @@ type bindMessage struct {
 	Opts     socket.BroadcastOptions
 }
 
-type Request struct {
-	Uid         string                   `json:"uid"`
-	Sid         socket.SocketId          `json:"sid"`
-	Type        SocketDataType           `json:"type"`
-	RequestId   string                   `json:"request_id"`
-	Rooms       []socket.Room            `json:"rooms"`
-	Opts        *socket.BroadcastOptions `json:"opts"`
-	Close       bool                     `json:"close"`
-	Sockets     []socket.SocketDetails   `json:"sockets"` // bool or []socket.Socket
-	Packet      *parser.Packet           `json:"packet"`
-	ClientCount uint64                   `json:"client_count"`
+type HandMessage struct {
+	Uid         string                      `json:"uid"`
+	Sid         socket.SocketId             `json:"sid"`
+	Type        SocketDataType              `json:"type"`
+	RequestId   string                      `json:"request_id"`
+	Rooms       []socket.Room               `json:"rooms"`
+	Opts        *socket.BroadcastOptions    `json:"opts"`
+	Close       bool                        `json:"close"`
+	Sockets     []socket.SocketDetails      `json:"sockets"` // bool or []socket.Socket
+	SocketIds   *types.Set[socket.SocketId] `json:"socket_ids"`
+	Packet      *parser.Packet              `json:"packet"`
+	ClientCount uint64                      `json:"client_count"`
 
 	// Resolve   func(...any) // []socket.Socket []socket.Room,or []
 	TimeoutId string // socket timeout key,use when(delete socket by request id)

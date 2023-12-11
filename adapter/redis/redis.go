@@ -87,7 +87,7 @@ func (r *RedisAdapter) ServerCount() int64 {
 // Adds a socket to a list of room.
 func (r *RedisAdapter) AddAll(id socket.SocketId, rooms *types.Set[socket.Room]) {
 	r.adapter.AddAll(id, rooms)
-	request := Request{
+	request := HandMessage{
 		Uid:  r.uid,
 		Type: REMOTE_JOIN,
 		Opts: &socket.BroadcastOptions{
@@ -160,7 +160,7 @@ func (r *RedisAdapter) BroadcastWithAck(packet *parser.Packet, opts *socket.Broa
 			Except: opts.Except,
 			Flags:  opts.Flags,
 		}
-		request := r.parser.encode(Request{
+		request := r.parser.encode(HandMessage{
 			Uid:       r.uid,
 			RequestId: requestId,
 			Type:      BROADCAST,
@@ -207,7 +207,7 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 		Rooms:  opts.Rooms,
 		Except: opts.Except,
 	}
-	request := (Request{
+	request := (HandMessage{
 		Uid:       r.uid,
 		RequestId: requestId,
 		Type:      REMOTE_FETCH,
@@ -219,7 +219,7 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 				delete(r.requests, requestId)
 			}
 		})
-		r.requests[requestId] = &Request{
+		r.requests[requestId] = &HandMessage{
 			Type:      REMOTE_FETCH,
 			NumSub:    numSub,
 			TimeoutId: timeoutId,
@@ -241,7 +241,7 @@ func (r *RedisAdapter) AddSockets(opts *socket.BroadcastOptions, rooms []socket.
 		r.adapter.AddSockets(opts, rooms)
 		return
 	}
-	request := Request{
+	request := HandMessage{
 		Uid:  r.uid,
 		Type: REMOTE_JOIN,
 		Opts: &socket.BroadcastOptions{
@@ -259,7 +259,7 @@ func (r *RedisAdapter) DelSockets(opts *socket.BroadcastOptions, rooms []socket.
 		r.adapter.DelSockets(opts, rooms)
 		return
 	}
-	request := Request{
+	request := HandMessage{
 		Uid:  r.uid,
 		Type: REMOTE_LEAVE,
 		Opts: &socket.BroadcastOptions{
@@ -277,7 +277,7 @@ func (r *RedisAdapter) DisconnectSockets(opts *socket.BroadcastOptions, close bo
 		r.adapter.DisconnectSockets(opts, close)
 		return
 	}
-	request := Request{
+	request := HandMessage{
 		Uid:  r.uid,
 		Type: REMOTE_DISCONNECT,
 		Opts: &socket.BroadcastOptions{
@@ -296,7 +296,7 @@ func (r *RedisAdapter) ServerSideEmit(packet []any) error {
 	if ok {
 		return r.serverSideEmitWithAck(packet)
 	}
-	resquest := Request{
+	resquest := HandMessage{
 		Uid:  r.uid,
 		Type: SERVER_SIDE_EMIT,
 		Data: packet,
@@ -316,7 +316,7 @@ func (r *RedisAdapter) serverSideEmitWithAck(packet []any) error {
 	}
 
 	requestId := uuid.New().String()
-	request := Request{
+	request := HandMessage{
 		Uid:       r.uid,
 		RequestId: requestId,
 		Type:      SERVER_SIDE_EMIT,
@@ -330,7 +330,7 @@ func (r *RedisAdapter) serverSideEmitWithAck(packet []any) error {
 		delete(r.requests, requestId)
 	})
 
-	r.requests[requestId] = &Request{
+	r.requests[requestId] = &HandMessage{
 		Type:      SERVER_SIDE_EMIT,
 		NumSub:    numSub,
 		TimeoutId: timeoutId,
@@ -469,7 +469,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 		return
 	}
 	// let request;
-	request := Request{}
+	request := HandMessage{}
 	if err := json.Unmarshal([]byte(msg), &request); err != nil {
 		log.Println(err)
 		return
@@ -484,22 +484,16 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 			rms.Add(v)
 		}
 		sockets := r.Sockets(rms)
-		response := struct {
-			RequestId string
-			Sockets   *types.Set[socket.SocketId]
-		}{
+		response := HandMessage{
 			RequestId: request.RequestId,
-			Sockets:   sockets,
+			SocketIds: sockets,
 		}
 		r.publishResponse(request.RequestId, response)
 	case ALL_ROOMS:
 		if r.requests[request.RequestId] != nil {
 			return
 		}
-		response := struct {
-			RequestId string
-			Rooms     []socket.Room
-		}{
+		response := HandMessage{
 			RequestId: request.RequestId,
 			Rooms:     r.Rooms().Keys(),
 		}
@@ -514,9 +508,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 			return
 		}
 		socket.Join(request.Rooms...)
-		response := struct {
-			RequestId string
-		}{
+		response := HandMessage{
 			RequestId: request.RequestId,
 		}
 		r.publishResponse(request.RequestId, response)
@@ -533,9 +525,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 		if len(request.Rooms) > 0 {
 			socket.Leave(request.Rooms[0])
 		}
-		response := struct {
-			RequestId string
-		}{
+		response := HandMessage{
 			RequestId: request.RequestId,
 		}
 		r.publishResponse(request.RequestId, response)
@@ -550,9 +540,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 			return
 		}
 		socket.Disconnect(request.Close)
-		response := struct {
-			RequestId string
-		}{
+		response := HandMessage{
 			RequestId: request.RequestId,
 		}
 		r.publishResponse(request.RequestId, response)
@@ -658,7 +646,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 }
 
 func (r *RedisAdapter) onresponse(channel, msg string) {
-	response := Request{}
+	response := HandMessage{}
 	if err := json.Unmarshal([]byte(msg), &response); err != nil {
 		return
 	}
