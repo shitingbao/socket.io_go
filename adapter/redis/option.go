@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/pborman/uuid"
@@ -49,6 +50,16 @@ type option struct {
 	HeartbeatTimeout                 int
 	RequestsTimeout                  time.Duration
 	PublishOnSpecificResponseChannel bool
+}
+
+var (
+	HandMessagePool *sync.Pool
+)
+
+func init() {
+	HandMessagePool.New = func() interface{} {
+		return &HandMessage{}
+	}
 }
 
 type Option func(*option)
@@ -107,7 +118,7 @@ type RedisAdapter struct {
 
 	_broadcast func(*parser.Packet, *socket.BroadcastOptions)
 
-	requestsTimeout                  time.Duration
+	requestsTimeout                  time.Duration // 多节点应答超时时间
 	publishOnSpecificResponseChannel bool
 
 	uid                     string // only uid
@@ -124,7 +135,7 @@ type RedisAdapter struct {
 	Subs  []*redis.PubSub
 	PSubs []*redis.PubSub
 
-	task Task
+	FetchPipe chan int
 }
 
 func NewRedisAdapter(opts ...Option) (*RedisAdapter, error) {
@@ -161,8 +172,6 @@ func NewRedisAdapter(opts ...Option) (*RedisAdapter, error) {
 		ackRequests:    make(map[string]AckRequest),
 		redisListeners: make(map[string](func(string, string))),
 		readonly:       func() {},
-
-		task: NewDefaultTask(),
 	}, nil
 }
 
@@ -183,6 +192,8 @@ type bindMessage struct {
 	Opts     socket.BroadcastOptions
 }
 
+// sync pool
+// @review 加入锁，使用结束和超时自动清理，使用过程中不能被清理
 type HandMessage struct {
 	Uid         string                      `json:"uid"`
 	Sid         socket.SocketId             `json:"sid"`
@@ -197,11 +208,12 @@ type HandMessage struct {
 	ClientCount uint64                      `json:"client_count"`
 
 	// Resolve   func(...any) // []socket.Socket []socket.Room,or []
-	TimeoutId string // socket timeout key,use when(delete socket by request id)
+	// TimeoutId string // socket timeout key,use when(delete socket by request id)
 	NumSub    int64
 	MsgCount  int64
 	Responses []any
 	Data      any
+	Channal   chan socket.SocketDetails
 }
 
 type AckRequest interface {
