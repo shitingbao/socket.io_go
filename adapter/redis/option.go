@@ -66,8 +66,6 @@ type Option func(*option)
 
 type SocketDataType int
 
-type friendlyErrorHandler func()
-
 // WithRedisAddress eg : 127.0.0.1:6379
 func WithRedisAddress(ads string) Option {
 	return func(o *option) {
@@ -126,10 +124,10 @@ type RedisAdapter struct {
 	requestChannel          string
 	responseChannel         string
 	specificResponseChannel string
-	requests                map[string]*HandMessage
-	ackRequests             map[string]AckRequest
-	redisListeners          map[string](func(channel, msg string))
-	readonly                friendlyErrorHandler
+	requests                sync.Map
+	ackRequests             sync.Map
+	redisListeners          sync.Map //  map[string](func(channel, msg string))
+	readonly                func()
 	parser                  Parser
 
 	Subs  []*redis.PubSub
@@ -168,28 +166,16 @@ func NewRedisAdapter(opts ...Option) (*RedisAdapter, error) {
 		requestsTimeout:                  op.RequestsTimeout,
 		publishOnSpecificResponseChannel: op.PublishOnSpecificResponseChannel,
 
-		requests:       make(map[string]*HandMessage),
-		ackRequests:    make(map[string]AckRequest),
-		redisListeners: make(map[string](func(string, string))),
+		requests:       sync.Map{},
+		ackRequests:    sync.Map{}, // make(map[string]AckRequest),
+		redisListeners: sync.Map{}, // make(map[string](func(string, string))),
 		readonly:       func() {},
 	}, nil
-}
-
-type ClusterMessage struct {
-	ServerId string
-	MType    SocketDataType
-	Data     map[string]any
 }
 
 type Parser interface {
 	decode(msg any) any
 	encode(msg any) any
-}
-
-type bindMessage struct {
-	ServerId string
-	Packet   parser.Packet
-	Opts     socket.BroadcastOptions
 }
 
 // sync pool

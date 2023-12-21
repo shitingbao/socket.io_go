@@ -32,13 +32,12 @@ func (r *RedisAdapter) New(nsp socket.NamespaceInterface) socket.Adapter {
 	r.specificResponseChannel =
 		r.responseChannel + r.serverId + "#"
 
-	r.redisListeners["psub"] = func(msg, channel string) {
+	r.redisListeners.Store("psub", func(msg, channel string) {
 		r.onmessage(channel, msg)
-	}
-
-	r.redisListeners["sub"] = func(msg, channel string) {
+	})
+	r.redisListeners.Store("sub", func(msg, channel string) {
 		r.onrequest(channel, msg)
-	}
+	})
 
 	psub := r.rdb.PSubscribe(r.ctx, r.channel+"*") //  r.redisListeners["psub"]
 	r.PSubs = append(r.PSubs, psub)
@@ -174,7 +173,7 @@ func (r *RedisAdapter) BroadcastWithAck(packet *parser.Packet, opts *socket.Broa
 			clientCountCallbackFun: clientCountCallback,
 			ackFun:                 ack,
 		}
-		r.ackRequests[requestId] = req
+		r.ackRequests.Store(requestId, req)
 	}
 
 	r.adapter.BroadcastWithAck(packet, opts, clientCountCallback, ack)
@@ -224,7 +223,7 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 		localRequest.MsgCount = 1
 		localRequest.Sockets = lsockets
 		localRequest.Channal = mesChan
-		r.requests[requestId] = localRequest
+		r.requests.Store(requestId, localRequest)
 		err := r.rdb.Publish(r.ctx, r.requestChannel, putRequest).Err()
 		// @review 加入超时,超时后在这里清理 requests
 		sockets := []socket.SocketDetails{}
@@ -435,7 +434,11 @@ func (r *RedisAdapter) run(listen string, sub *redis.PubSub) {
 			log.Println(err)
 			continue
 		}
-		listener := r.redisListeners[listen]
+		rd, ok := r.redisListeners.Load(listen)
+		if !ok {
+			continue
+		}
+		listener := rd.(func(string, string))
 		listener(mes.Channel, mes.Payload)
 	}
 }
@@ -448,11 +451,11 @@ func (r *RedisAdapter) onmessage(channel, msg string) {
 	if room != "" {
 		return
 	}
-	args := bindMessage{}
+	args := HandMessage{}
 	if err := json.Unmarshal([]byte(msg), &args); err != nil {
 		return
 	}
-	if args.ServerId == r.serverId {
+	if args.Uid == r.serverId {
 		return
 	}
 	if args.Packet.Nsp == "" {
@@ -464,7 +467,7 @@ func (r *RedisAdapter) onmessage(channel, msg string) {
 
 	args.Opts.Rooms = &types.Set[socket.Room]{}
 	args.Opts.Except = &types.Set[socket.Room]{}
-	r.adapter.Broadcast(&args.Packet, &args.Opts)
+	r.adapter.Broadcast(args.Packet, args.Opts)
 }
 
 // 收到其他节点请求后的应答
@@ -492,7 +495,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 
 	switch request.Type {
 	case SOCKETS:
-		if r.requests[request.RequestId] != nil {
+		if _, ok := r.requests.Load(request.RequestId); ok {
 			return
 		}
 		rms := &types.Set[socket.Room]{}
@@ -502,7 +505,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 		response.SocketIds = r.Sockets(rms)
 		r.publishResponse(request.RequestId, response)
 	case ALL_ROOMS:
-		if r.requests[request.RequestId] != nil {
+		if _, ok := r.requests.Load(request.RequestId); ok {
 			return
 		}
 		response.Rooms = r.Rooms().Keys()
@@ -543,7 +546,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 		socket.Disconnect(request.Close)
 		r.publishResponse(request.RequestId, response)
 	case REMOTE_FETCH:
-		if r.requests[request.RequestId] != nil {
+		if _, ok := r.requests.Load(request.RequestId); ok {
 			return
 		}
 		localSockets := r.adapter.FetchSockets(request.Opts)
@@ -591,8 +594,8 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 		// break;
 	case BROADCAST:
 		{
-			req := r.ackRequests[request.RequestId]
-			if req != nil {
+			_, ok := r.ackRequests.Load(request.RequestId)
+			if ok {
 				return
 			}
 			opt := &socket.BroadcastOptions{
@@ -627,8 +630,9 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 	}
 	requestId := response.RequestId
 
-	if r.ackRequests[requestId] != nil {
-		ackRequest := r.ackRequests[requestId]
+	acq, ok := r.ackRequests.Load(requestId)
+	if ok {
+		ackRequest := acq.(AckRequest)
 		switch response.Type {
 		case BROADCAST_CLIENT_COUNT:
 			ackRequest.clientCountCallback(response.ClientCount)
@@ -637,10 +641,13 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 		}
 		return
 	}
-	if requestId == "" || !(r.requests[requestId] != nil || r.ackRequests[requestId] != nil) {
+	res, ok := r.requests.Load(requestId)
+	request := res.(*HandMessage) // Store everything obtained in this request, and delete it after all is obtained.
+
+	_, ackOk := r.ackRequests.Load(requestId)
+	if requestId == "" || !(ok || ackOk) {
 		return
 	}
-	request := r.requests[requestId] // Store everything obtained in this request, and delete it after all is obtained.
 	switch request.Type {
 	case SOCKETS:
 	case REMOTE_FETCH:
@@ -659,7 +666,7 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 			// 	request.Resolve(request.Sockets)
 			// }
 			close(request.Channal)
-			delete(r.requests, requestId)
+			r.requests.Delete(requestId)
 		}
 	case ALL_ROOMS:
 		request.MsgCount++
@@ -673,7 +680,7 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 			// if request.Resolve != nil {
 			// 	request.Resolve(request.Rooms)
 			// }
-			delete(r.requests, requestId)
+			r.requests.Delete(requestId)
 		}
 
 	case REMOTE_JOIN:
@@ -684,7 +691,7 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 		// if request.Resolve != nil {
 		// 	request.Resolve()
 		// }
-		delete(r.requests, (requestId))
+		r.requests.Delete(requestId)
 	case SERVER_SIDE_EMIT:
 		request.Responses = append(request.Responses, response.Packet.Data)
 		if int64(len(request.Responses)) == request.NumSub {
@@ -693,7 +700,7 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 			// if request.Resolve != nil {
 			// 	request.Resolve(request.Responses...)
 			// }
-			delete(r.requests, requestId)
+			r.requests.Delete(requestId)
 		}
 	default:
 		log.Println("ignoring unknown request type: ", request.Type)
