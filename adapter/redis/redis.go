@@ -215,9 +215,8 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 	putRequest.RequestId = requestId
 	putRequest.Type = REMOTE_FETCH
 	putRequest.Opts = &rawOpts
-	defer HandMessagePool.Put(putRequest)
-
 	return func(f func(sockets []socket.SocketDetails, err error)) {
+		defer HandMessagePool.Put(putRequest)
 		mesChan := make(chan socket.SocketDetails, 1)
 		localRequest := HandMessagePool.Get().(*HandMessage)
 		localRequest.Type = REMOTE_FETCH
@@ -226,7 +225,7 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 		localRequest.Sockets = lsockets
 		localRequest.Channal = mesChan
 		r.requests[requestId] = localRequest
-		r.rdb.Publish(r.ctx, r.requestChannel, putRequest)
+		err := r.rdb.Publish(r.ctx, r.requestChannel, putRequest).Err()
 		// @review 加入超时,超时后在这里清理 requests
 		sockets := []socket.SocketDetails{}
 
@@ -236,7 +235,7 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 		// r.apply(opts, func(socket *socket.Socket) {
 		// 	sockets = append(sockets, socket)
 		// })
-		f(sockets, nil)
+		f(sockets, err)
 	}
 }
 
@@ -659,6 +658,7 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 			// if request.Resolve != nil {
 			// 	request.Resolve(request.Sockets)
 			// }
+			close(request.Channal)
 			delete(r.requests, requestId)
 		}
 	case ALL_ROOMS:

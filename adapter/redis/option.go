@@ -53,7 +53,7 @@ type option struct {
 }
 
 var (
-	HandMessagePool *sync.Pool
+	HandMessagePool sync.Pool
 )
 
 func init() {
