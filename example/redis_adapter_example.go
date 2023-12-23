@@ -17,7 +17,7 @@ var serverName = "redisAdapterTest"
 
 func cross(ctx *gin.Context) {
 	// 白名单自定义
-	allowedOrigins := []string{"http://192.168.31.33:3001", "http://192.168.31.33:3000"}
+	allowedOrigins := []string{"http://192.168.31.20:3001", "http://192.168.31.20:3000"}
 	origin := ctx.Request.Header.Get("Origin")
 	// log.Println("origin=:", origin, " Referer:", ctx.Request.Referer()) origin or Referer
 	for _, allowedOrigin := range allowedOrigins {
@@ -39,11 +39,8 @@ func cross(ctx *gin.Context) {
 }
 
 func ExampleRedisAdapter() {
-	// one node
-	// go OtherNodeExampleRedisAdapter()
-
-	// two node
-	// go ExampleRedisAdapterNode(":8000")
+	// the node
+	go ExampleRedisAdapterNode(":8001")
 
 	// the other node
 	// these node can can discover each other in redisAdapterTest's system
@@ -81,6 +78,7 @@ func ExampleRedisAdapterNode(address string) {
 			client.Emit("pong", "pong")
 		})
 		client.On("join-room", func(datas ...any) {
+			log.Println("join-room datas:", datas)
 			das, ok := datas[0].(string)
 			if !ok {
 				client.Emit("error", "data err")
@@ -96,7 +94,7 @@ func ExampleRedisAdapterNode(address string) {
 				}
 			})
 			log.Println("join-room:", ids)
-			client.Emit("join-room", "pong")
+			client.Emit("join-room", ids)
 		})
 
 		client.On("disconnect", func(...any) {

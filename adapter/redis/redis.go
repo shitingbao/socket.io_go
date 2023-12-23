@@ -32,10 +32,10 @@ func (r *RedisAdapter) New(nsp socket.NamespaceInterface) socket.Adapter {
 	r.specificResponseChannel =
 		r.responseChannel + r.serverId + "#"
 
-	r.redisListeners.Store("psub", func(msg, channel string) {
+	r.redisListeners.Store("psub", func(channel, msg string) {
 		r.onmessage(channel, msg)
 	})
-	r.redisListeners.Store("sub", func(msg, channel string) {
+	r.redisListeners.Store("sub", func(channel, msg string) {
 		r.onrequest(channel, msg)
 	})
 
@@ -224,7 +224,11 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 		localRequest.Sockets = lsockets
 		localRequest.Channal = mesChan
 		r.requests.Store(requestId, localRequest)
-		err := r.rdb.Publish(r.ctx, r.requestChannel, putRequest).Err()
+		b, err := json.Marshal(putRequest.LocalHandMessage)
+		if err != nil {
+			return
+		}
+		err = r.rdb.Publish(r.ctx, r.requestChannel, b).Err()
 		// @review 加入超时,超时后在这里清理 requests
 		sockets := []socket.SocketDetails{}
 
@@ -431,7 +435,6 @@ func (r *RedisAdapter) run(listen string, sub *redis.PubSub) {
 	for {
 		mes, err := sub.ReceiveMessage(r.ctx)
 		if err != nil {
-			log.Println(err)
 			continue
 		}
 		rd, ok := r.redisListeners.Load(listen)
@@ -480,11 +483,9 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 		log.Println("ignore different channel")
 		return
 	}
-	// let request;
 	request := HandMessagePool.Get().(*HandMessage)
 	defer HandMessagePool.Put(request)
 	if err := json.Unmarshal([]byte(msg), request); err != nil {
-		log.Println(err)
 		return
 	}
 

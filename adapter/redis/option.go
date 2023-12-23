@@ -181,6 +181,11 @@ type Parser interface {
 // sync pool
 // @review 加入锁，使用结束和超时自动清理，使用过程中不能被清理
 type HandMessage struct {
+	LocalHandMessage
+	Channal chan socket.SocketDetails `json:"channal"`
+}
+
+type LocalHandMessage struct {
 	Uid         string                      `json:"uid"`
 	Sid         socket.SocketId             `json:"sid"`
 	Type        SocketDataType              `json:"type"`
@@ -193,13 +198,11 @@ type HandMessage struct {
 	Packet      *parser.Packet              `json:"packet"`
 	ClientCount uint64                      `json:"client_count"`
 
-	// Resolve   func(...any) // []socket.Socket []socket.Room,or []
-	// TimeoutId string // socket timeout key,use when(delete socket by request id)
-	NumSub    int64
-	MsgCount  int64
-	Responses []any
-	Data      any
-	Channal   chan socket.SocketDetails
+	TimeoutId string // socket timeout key,use when(delete socket by request id)
+	NumSub    int64  `json:"num_sub"`
+	MsgCount  int64  `json:"msg_count"`
+	Responses []any  `json:"responses"`
+	Data      any    `json:"data"`
 }
 
 type AckRequest interface {
