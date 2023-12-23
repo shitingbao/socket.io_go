@@ -30,7 +30,7 @@ func (r *RedisAdapter) New(nsp socket.NamespaceInterface) socket.Adapter {
 	r.requestChannel = prefix + "-request#" + nsp.Name() + "#"
 	r.responseChannel = prefix + "-response#" + nsp.Name() + "#"
 	r.specificResponseChannel =
-		r.responseChannel + r.serverId + "#"
+		r.responseChannel + r.uid + "#"
 
 	r.redisListeners.Store("psub", func(channel, msg string) {
 		r.onmessage(channel, msg)
@@ -458,7 +458,7 @@ func (r *RedisAdapter) onmessage(channel, msg string) {
 	if err := json.Unmarshal([]byte(msg), &args); err != nil {
 		return
 	}
-	if args.Uid == r.serverId {
+	if args.Uid == r.uid {
 		return
 	}
 	if args.Packet.Nsp == "" {
@@ -479,8 +479,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 		r.onresponse(channel, msg)
 		return
 	}
-	if strings.HasPrefix(channel, r.requestChannel) {
-		log.Println("ignore different channel")
+	if !strings.HasPrefix(channel, r.requestChannel) {
 		return
 	}
 	request := HandMessagePool.Get().(*HandMessage)
@@ -504,13 +503,13 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 			rms.Add(v)
 		}
 		response.SocketIds = r.Sockets(rms)
-		r.publishResponse(request.RequestId, response)
+		r.publishResponse(request, response)
 	case ALL_ROOMS:
 		if _, ok := r.requests.Load(request.RequestId); ok {
 			return
 		}
 		response.Rooms = r.Rooms().Keys()
-		r.publishResponse(request.RequestId, response)
+		r.publishResponse(request, response)
 	case REMOTE_JOIN:
 		if request.Opts != nil {
 			r.AddSockets(request.Opts, request.Rooms)
@@ -521,7 +520,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 			return
 		}
 		socket.Join(request.Rooms...)
-		r.publishResponse(request.RequestId, response)
+		r.publishResponse(request, response)
 	case REMOTE_LEAVE:
 		if request.Opts != nil {
 			r.DelSockets(request.Opts, request.Rooms)
@@ -534,7 +533,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 		if len(request.Rooms) > 0 {
 			socket.Leave(request.Rooms[0])
 		}
-		r.publishResponse(request.RequestId, response)
+		r.publishResponse(request, response)
 	case REMOTE_DISCONNECT:
 		if request.Opts != nil {
 			r.DisconnectSockets(request.Opts, request.Close)
@@ -545,7 +544,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 			return
 		}
 		socket.Disconnect(request.Close)
-		r.publishResponse(request.RequestId, response)
+		r.publishResponse(request, response)
 	case REMOTE_FETCH:
 		if _, ok := r.requests.Load(request.RequestId); ok {
 			return
@@ -555,7 +554,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 			response.Sockets = append(response.Sockets, sockets...)
 		}
 		localSockets(socketFetch)
-		r.publishResponse(request.RequestId, response)
+		r.publishResponse(request, response)
 	case SERVER_SIDE_EMIT:
 		if request.Uid == r.uid {
 			return
@@ -604,7 +603,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 				Except: request.Opts.Except,
 			}
 			r.BroadcastWithAck(request.Packet, opt, func(clientCount uint64) {
-				r.publishResponse(request.RequestId, struct {
+				r.publishResponse(request, struct {
 					Type        SocketDataType
 					RequestId   string
 					ClientCount uint64
@@ -615,7 +614,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 			}, func(arg []any, err error) {
 				// response.Type = BROADCAST_CLIENT_COUNT
 				// response.Packet = arg
-				r.publishResponse(request.RequestId, response)
+				r.publishResponse(request, response)
 			})
 		}
 	default:
@@ -653,10 +652,8 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 	case SOCKETS:
 	case REMOTE_FETCH:
 		request.MsgCount++
-		if response.Sockets == nil {
-			return
-		}
 		request.Sockets = append(request.Sockets, response.Sockets...)
+
 		for _, s := range response.Sockets {
 			request.Channal <- s
 		}
@@ -708,8 +705,8 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 	}
 }
 
-func (r *RedisAdapter) publishResponse(requestId string, response any) {
-	responseChannel := r.responseChannel + "$" + requestId + "#"
+func (r *RedisAdapter) publishResponse(request *HandMessage, response any) {
+	responseChannel := r.responseChannel + "$" + request.Uid + "#"
 	if !r.publishOnSpecificResponseChannel {
 		responseChannel = r.responseChannel
 	}

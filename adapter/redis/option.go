@@ -95,7 +95,7 @@ type RedisAdapter struct {
 	events.EventEmitter
 
 	// serverId should be a unique identifier in the system to guide all nodes to join their own services.
-	serverId string
+	uid string // only uid
 
 	// The number of ms between two heartbeats.
 	// 5000
@@ -119,7 +119,6 @@ type RedisAdapter struct {
 	requestsTimeout                  time.Duration // 多节点应答超时时间
 	publishOnSpecificResponseChannel bool
 
-	uid                     string // only uid
 	channel                 string
 	requestChannel          string
 	responseChannel         string
@@ -159,7 +158,7 @@ func NewRedisAdapter(opts ...Option) (*RedisAdapter, error) {
 	return &RedisAdapter{
 		rdb:               r,
 		ctx:               context.Background(),
-		serverId:          uuid.New(),
+		uid:               uuid.New(),
 		HeartbeatInterval: op.HeartbeatInterval,
 		HeartbeatTimeout:  op.HeartbeatTimeout,
 
