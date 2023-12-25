@@ -182,6 +182,7 @@ type Parser interface {
 type HandMessage struct {
 	LocalHandMessage
 	Channal chan socket.SocketDetails `json:"channal"`
+	Lock    sync.Locker
 }
 
 type LocalHandMessage struct {

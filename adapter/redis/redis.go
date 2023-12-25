@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -223,6 +224,7 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 		localRequest.MsgCount = 1
 		localRequest.Sockets = lsockets
 		localRequest.Channal = mesChan
+		localRequest.Lock = &sync.Mutex{}
 		r.requests.Store(requestId, localRequest)
 		b, err := json.Marshal(putRequest.LocalHandMessage)
 		if err != nil {
@@ -474,18 +476,17 @@ func (r *RedisAdapter) onmessage(channel, msg string) {
 }
 
 // 收到其他节点请求后的应答
-func (r *RedisAdapter) onrequest(channel, msg string) {
+func (r *RedisAdapter) onrequest(channel, msg string) error {
 	if strings.HasPrefix(channel, r.responseChannel) {
-		r.onresponse(channel, msg)
-		return
+		return r.onresponse(channel, msg)
 	}
 	if !strings.HasPrefix(channel, r.requestChannel) {
-		return
+		return nil
 	}
 	request := HandMessagePool.Get().(*HandMessage)
 	defer HandMessagePool.Put(request)
 	if err := json.Unmarshal([]byte(msg), request); err != nil {
-		return
+		return err
 	}
 
 	response := HandMessagePool.Get().(*HandMessage)
@@ -496,68 +497,68 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 	switch request.Type {
 	case SOCKETS:
 		if _, ok := r.requests.Load(request.RequestId); ok {
-			return
+			return nil
 		}
 		rms := &types.Set[socket.Room]{}
 		for _, v := range request.Rooms {
 			rms.Add(v)
 		}
 		response.SocketIds = r.Sockets(rms)
-		r.publishResponse(request, response)
+		return r.publishResponse(request, response)
 	case ALL_ROOMS:
 		if _, ok := r.requests.Load(request.RequestId); ok {
-			return
+			return nil
 		}
 		response.Rooms = r.Rooms().Keys()
-		r.publishResponse(request, response)
+		return r.publishResponse(request, response)
 	case REMOTE_JOIN:
 		if request.Opts != nil {
 			r.AddSockets(request.Opts, request.Rooms)
-			return
+			return nil
 		}
 		socket, ok := r.nsp.Sockets().Load(request.Sid)
 		if !ok {
-			return
+			return nil
 		}
 		socket.Join(request.Rooms...)
-		r.publishResponse(request, response)
+		return r.publishResponse(request, response)
 	case REMOTE_LEAVE:
 		if request.Opts != nil {
 			r.DelSockets(request.Opts, request.Rooms)
-			return
+			return nil
 		}
 		socket, ok := r.nsp.Sockets().Load(request.Sid)
 		if !ok {
-			return
+			return nil
 		}
 		if len(request.Rooms) > 0 {
 			socket.Leave(request.Rooms[0])
 		}
-		r.publishResponse(request, response)
+		return r.publishResponse(request, response)
 	case REMOTE_DISCONNECT:
 		if request.Opts != nil {
 			r.DisconnectSockets(request.Opts, request.Close)
-			return
+			return nil
 		}
 		socket, ok := r.nsp.Sockets().Load(request.Sid)
 		if !ok {
-			return
+			return nil
 		}
 		socket.Disconnect(request.Close)
-		r.publishResponse(request, response)
+		return r.publishResponse(request, response)
 	case REMOTE_FETCH:
 		if _, ok := r.requests.Load(request.RequestId); ok {
-			return
+			return nil
 		}
 		localSockets := r.adapter.FetchSockets(request.Opts)
 		socketFetch := func(sockets []socket.SocketDetails, err error) {
 			response.Sockets = append(response.Sockets, sockets...)
 		}
 		localSockets(socketFetch)
-		r.publishResponse(request, response)
+		return r.publishResponse(request, response)
 	case SERVER_SIDE_EMIT:
 		if request.Uid == r.uid {
-			return
+			return nil
 		}
 		// withAck := request.RequestId
 		// if withAck != "" {
@@ -596,21 +597,29 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 		{
 			_, ok := r.ackRequests.Load(request.RequestId)
 			if ok {
-				return
+				return nil
 			}
 			opt := &socket.BroadcastOptions{
 				Rooms:  request.Opts.Rooms,
 				Except: request.Opts.Except,
 			}
 			r.BroadcastWithAck(request.Packet, opt, func(clientCount uint64) {
-				r.publishResponse(request, struct {
-					Type        SocketDataType
-					RequestId   string
-					ClientCount uint64
-				}{Type: BROADCAST_CLIENT_COUNT,
-					RequestId:   request.RequestId,
-					ClientCount: clientCount,
-				})
+				response := HandMessagePool.Get().(*HandMessage)
+				defer HandMessagePool.Put(response)
+				response.Type = BROADCAST_CLIENT_COUNT
+				response.RequestId = request.RequestId
+				response.ClientCount = clientCount
+
+				//  struct {
+				// 	Type        SocketDataType
+				// 	RequestId   string
+				// 	ClientCount uint64
+				// }{Type: BROADCAST_CLIENT_COUNT,
+				// 	RequestId:   request.RequestId,
+				// 	ClientCount: clientCount,
+				// }
+
+				r.publishResponse(request, response)
 			}, func(arg []any, err error) {
 				// response.Type = BROADCAST_CLIENT_COUNT
 				// response.Packet = arg
@@ -620,33 +629,38 @@ func (r *RedisAdapter) onrequest(channel, msg string) {
 	default:
 		log.Println("ignoring unknown request type: ", request.Type)
 	}
+	return nil
 }
 
 // 收到自己节点发出请求的应答消息
-func (r *RedisAdapter) onresponse(channel, msg string) {
+func (r *RedisAdapter) onresponse(channel, msg string) error {
 	response := HandMessage{}
 	if err := json.Unmarshal([]byte(msg), &response); err != nil {
-		return
+		return err
 	}
 	requestId := response.RequestId
-
 	acq, ok := r.ackRequests.Load(requestId)
 	if ok {
-		ackRequest := acq.(AckRequest)
+		ackRequest, ok := acq.(AckRequest)
+		if !ok {
+			return nil
+		}
 		switch response.Type {
 		case BROADCAST_CLIENT_COUNT:
 			ackRequest.clientCountCallback(response.ClientCount)
 		case BROADCAST_ACK:
 			ackRequest.ack([]any{response.Packet}, nil)
 		}
-		return
+		return nil
 	}
 	res, ok := r.requests.Load(requestId)
-	request := res.(*HandMessage) // Store everything obtained in this request, and delete it after all is obtained.
-
+	request, hk := res.(*HandMessage) // Store everything obtained in this request, and delete it after all is obtained.
+	if !hk {
+		return nil
+	}
 	_, ackOk := r.ackRequests.Load(requestId)
 	if requestId == "" || !(ok || ackOk) {
-		return
+		return nil
 	}
 	switch request.Type {
 	case SOCKETS:
@@ -669,7 +683,7 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 	case ALL_ROOMS:
 		request.MsgCount++
 		if response.Rooms == nil {
-			return
+			return nil
 		}
 		request.Rooms = append(request.Rooms, response.Rooms...)
 		if request.MsgCount == request.NumSub {
@@ -703,12 +717,19 @@ func (r *RedisAdapter) onresponse(channel, msg string) {
 	default:
 		log.Println("ignoring unknown request type: ", request.Type)
 	}
+	return nil
 }
 
-func (r *RedisAdapter) publishResponse(request *HandMessage, response any) {
+func (r *RedisAdapter) publishResponse(request *HandMessage, response *HandMessage) error {
 	responseChannel := r.responseChannel + "$" + request.Uid + "#"
 	if !r.publishOnSpecificResponseChannel {
 		responseChannel = r.responseChannel
 	}
-	r.rdb.Publish(r.ctx, responseChannel, response)
+
+	b, err := json.Marshal(response.LocalHandMessage)
+	if err != nil {
+		return err
+	}
+	err = r.rdb.Publish(r.ctx, responseChannel, b).Err()
+	return err
 }
