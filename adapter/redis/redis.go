@@ -3,7 +3,7 @@ package redis
 import (
 	"encoding/json"
 	"errors"
-	"log"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -217,12 +217,11 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 	putRequest.Opts = &rawOpts
 	return func(f func(sockets []socket.SocketDetails, err error)) {
 		defer HandMessagePool.Put(putRequest)
-		mesChan := make(chan socket.SocketDetails, 1)
+		mesChan := make(chan RemoteSocket, 1)
 		localRequest := HandMessagePool.Get().(*HandMessage)
 		localRequest.Type = REMOTE_FETCH
 		localRequest.NumSub = numSub
 		localRequest.MsgCount = 1
-		localRequest.Sockets = lsockets
 		localRequest.Channal = mesChan
 		localRequest.Lock = &sync.Mutex{}
 		r.requests.Store(requestId, localRequest)
@@ -233,9 +232,15 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 		err = r.rdb.Publish(r.ctx, r.requestChannel, b).Err()
 		// @review 加入超时,超时后在这里清理 requests
 		sockets := []socket.SocketDetails{}
-
+		sockets = append(sockets, lsockets...)
 		for sk := range mesChan {
-			sockets = append(sockets, sk)
+			l := &localRemoteSocket{
+				id:        sk.Id,
+				handshake: sk.Handshake,
+				rooms:     sk.Rooms,
+				data:      sk.Data,
+			}
+			sockets = append(sockets, l)
 		}
 		// r.apply(opts, func(socket *socket.Socket) {
 		// 	sockets = append(sockets, socket)
@@ -448,31 +453,32 @@ func (r *RedisAdapter) run(listen string, sub *redis.PubSub) {
 	}
 }
 
-func (r *RedisAdapter) onmessage(channel, msg string) {
+func (r *RedisAdapter) onmessage(channel, msg string) error {
 	if !strings.HasPrefix(channel, r.channel) {
-		return
+		return errors.New("not channel")
 	}
 	room := channel[len(r.channel):]
 	if room != "" {
-		return
+		return errors.New("room is nil")
 	}
 	args := HandMessage{}
 	if err := json.Unmarshal([]byte(msg), &args); err != nil {
-		return
+		return err
 	}
 	if args.Uid == r.uid {
-		return
+		return errors.New("sample uid")
 	}
 	if args.Packet.Nsp == "" {
 		args.Packet.Nsp = "/"
 	}
 	if args.Packet.Nsp != r.nsp.Name() {
-		return
+		return errors.New("Nsp Name not sample")
 	}
 
 	args.Opts.Rooms = &types.Set[socket.Room]{}
 	args.Opts.Except = &types.Set[socket.Room]{}
 	r.adapter.Broadcast(args.Packet, args.Opts)
+	return nil
 }
 
 // 收到其他节点请求后的应答
@@ -481,7 +487,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) error {
 		return r.onresponse(channel, msg)
 	}
 	if !strings.HasPrefix(channel, r.requestChannel) {
-		return nil
+		return errors.New("not request channel")
 	}
 	request := HandMessagePool.Get().(*HandMessage)
 	defer HandMessagePool.Put(request)
@@ -490,7 +496,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) error {
 	}
 
 	response := HandMessagePool.Get().(*HandMessage)
-	defer HandMessagePool.Put(request)
+	defer HandMessagePool.Put(response)
 
 	response.RequestId = request.RequestId
 
@@ -548,11 +554,19 @@ func (r *RedisAdapter) onrequest(channel, msg string) error {
 		return r.publishResponse(request, response)
 	case REMOTE_FETCH:
 		if _, ok := r.requests.Load(request.RequestId); ok {
-			return nil
+			return errors.New("local out")
 		}
 		localSockets := r.adapter.FetchSockets(request.Opts)
 		socketFetch := func(sockets []socket.SocketDetails, err error) {
-			response.Sockets = append(response.Sockets, sockets...)
+			for _, sd := range sockets {
+				s := RemoteSocket{
+					Id:        sd.Id(),
+					Handshake: sd.Handshake(),
+					Rooms:     sd.Rooms(),
+					Data:      sd.Data(),
+				}
+				response.Sockets = append(response.Sockets, s)
+			}
 		}
 		localSockets(socketFetch)
 		return r.publishResponse(request, response)
@@ -627,15 +641,16 @@ func (r *RedisAdapter) onrequest(channel, msg string) error {
 			})
 		}
 	default:
-		log.Println("ignoring unknown request type: ", request.Type)
+		return errors.New("ignoring unknown onrequest type: " + strconv.Itoa(int(request.Type)))
 	}
 	return nil
 }
 
 // 收到自己节点发出请求的应答消息
 func (r *RedisAdapter) onresponse(channel, msg string) error {
-	response := HandMessage{}
-	if err := json.Unmarshal([]byte(msg), &response); err != nil {
+	response := HandMessagePool.Get().(*HandMessage)
+	defer HandMessagePool.Put(response)
+	if err := json.Unmarshal([]byte(msg), response); err != nil {
 		return err
 	}
 	requestId := response.RequestId
@@ -658,6 +673,8 @@ func (r *RedisAdapter) onresponse(channel, msg string) error {
 	if !hk {
 		return nil
 	}
+	request.Lock.Lock()
+	defer request.Lock.Unlock()
 	_, ackOk := r.ackRequests.Load(requestId)
 	if requestId == "" || !(ok || ackOk) {
 		return nil
@@ -666,8 +683,6 @@ func (r *RedisAdapter) onresponse(channel, msg string) error {
 	case SOCKETS:
 	case REMOTE_FETCH:
 		request.MsgCount++
-		request.Sockets = append(request.Sockets, response.Sockets...)
-
 		for _, s := range response.Sockets {
 			request.Channal <- s
 		}
@@ -715,7 +730,7 @@ func (r *RedisAdapter) onresponse(channel, msg string) error {
 			r.requests.Delete(requestId)
 		}
 	default:
-		log.Println("ignoring unknown request type: ", request.Type)
+		return errors.New("ignoring unknown onresponse type: " + strconv.Itoa(int(request.Type)))
 	}
 	return nil
 }

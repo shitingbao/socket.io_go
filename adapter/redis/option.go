@@ -181,8 +181,15 @@ type Parser interface {
 // @review 加入锁，使用结束和超时自动清理，使用过程中不能被清理
 type HandMessage struct {
 	LocalHandMessage
-	Channal chan socket.SocketDetails `json:"channal"`
+	Channal chan RemoteSocket `json:"channal"`
 	Lock    sync.Locker
+}
+
+type RemoteSocket struct {
+	Id        socket.SocketId         `json:"id"`
+	Handshake *socket.Handshake       `json:"handshake"`
+	Rooms     *types.Set[socket.Room] `json:"rooms"`
+	Data      any                     `json:"data"`
 }
 
 type LocalHandMessage struct {
@@ -193,7 +200,7 @@ type LocalHandMessage struct {
 	Rooms       []socket.Room               `json:"rooms"`
 	Opts        *socket.BroadcastOptions    `json:"opts"`
 	Close       bool                        `json:"close"`
-	Sockets     []socket.SocketDetails      `json:"sockets"` // bool or []socket.Socket
+	Sockets     []RemoteSocket              `json:"sockets"` // bool or []socket.Socket
 	SocketIds   *types.Set[socket.SocketId] `json:"socket_ids"`
 	Packet      *parser.Packet              `json:"packet"`
 	ClientCount uint64                      `json:"client_count"`
@@ -221,4 +228,27 @@ func (a *ackRequest) clientCountCallback(clientCount uint64) {
 
 func (a *ackRequest) ack(da []any, err error) {
 	a.ackFun(da, err)
+}
+
+type localRemoteSocket struct {
+	id        socket.SocketId
+	handshake *socket.Handshake
+	rooms     *types.Set[socket.Room]
+	data      any
+}
+
+func (r *localRemoteSocket) Id() socket.SocketId {
+	return r.id
+}
+
+func (r *localRemoteSocket) Handshake() *socket.Handshake {
+	return r.handshake
+}
+
+func (r *localRemoteSocket) Rooms() *types.Set[socket.Room] {
+	return r.rooms
+}
+
+func (r *localRemoteSocket) Data() any {
+	return r.data
 }

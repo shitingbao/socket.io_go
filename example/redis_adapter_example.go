@@ -45,7 +45,7 @@ func ExampleRedisAdapter() {
 	// the other node
 	// these node can can discover each other in redisAdapterTest's system
 	// redisAdapterTest is my example serverName
-	// go ExampleRedisAdapterNode(":8001")
+	// go ExampleRedisAdapterNode(":8002")
 	// ...
 	// ...
 	// other node
@@ -90,6 +90,7 @@ func ExampleRedisAdapterNode(address string) {
 			ids := []socket.SocketId{}
 			fs(func(sks []*socket.RemoteSocket, err error) {
 				for _, sck := range sks {
+					log.Println("Handshake=:", sck.Handshake())
 					ids = append(ids, sck.Id())
 				}
 			})
