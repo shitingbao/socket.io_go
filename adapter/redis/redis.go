@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -220,7 +221,9 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 		mesChan := make(chan RemoteSocket, 1)
 		localRequest := HandMessagePool.Get().(*HandMessage)
 		localRequest.Type = REMOTE_FETCH
-		localRequest.MsgCount = 1
+		localRequest.MsgCount = atomic.Int32{}
+		localRequest.MsgCount.Add(1)
+
 		localRequest.Channal = mesChan
 		r.requests.Store(requestId, localRequest)
 		defer r.requests.Delete(requestId)
@@ -689,20 +692,21 @@ func (r *RedisAdapter) onresponse(channel, msg string) error {
 	switch request.Type {
 	case SOCKETS:
 	case REMOTE_FETCH:
-		request.MsgCount++
+		request.MsgCount.Add(1)
 		for _, s := range response.Sockets {
 			request.Channal <- s
 		}
-		if request.MsgCount == r.ServerCount() { // NumSub is the number of service nodes
+
+		if int64(request.MsgCount.Load()) == r.ServerCount() { // NumSub is the number of service nodes
 			close(request.Channal)
 		}
 	case ALL_ROOMS:
-		request.MsgCount++
+		request.MsgCount.Add(1)
 		if response.Rooms == nil {
 			return nil
 		}
 		request.Rooms = append(request.Rooms, response.Rooms...)
-		if request.MsgCount == r.ServerCount() {
+		if int64(request.MsgCount.Load()) == r.ServerCount() {
 			// @review
 			// if request.Resolve != nil {
 			// 	request.Resolve(request.Rooms)

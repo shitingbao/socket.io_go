@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pborman/uuid"
@@ -203,7 +204,7 @@ type LocalHandMessage struct {
 	SocketIds   *types.Set[socket.SocketId] `json:"socket_ids"`
 	Packet      *parser.Packet              `json:"packet"`
 	ClientCount uint64                      `json:"client_count"`
-	MsgCount    int64                       `json:"msg_count"`
+	MsgCount    atomic.Int32                `json:"msg_count"`
 	Responses   []any                       `json:"responses"`
 	Data        any                         `json:"data"`
 }
