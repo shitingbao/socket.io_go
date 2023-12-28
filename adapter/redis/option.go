@@ -55,11 +55,16 @@ type option struct {
 
 var (
 	HandMessagePool sync.Pool
+	RequestIdPool   sync.Pool
 )
 
 func init() {
 	HandMessagePool.New = func() interface{} {
 		return &HandMessage{}
+	}
+
+	RequestIdPool.New = func() interface{} {
+		return uuid.New()
 	}
 }
 

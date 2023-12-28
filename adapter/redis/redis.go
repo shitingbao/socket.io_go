@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/zishang520/engine.io/events"
 	"github.com/zishang520/engine.io/types"
@@ -154,8 +153,9 @@ func (r *RedisAdapter) Broadcast(packet *parser.Packet, opts *socket.BroadcastOp
 func (r *RedisAdapter) BroadcastWithAck(packet *parser.Packet, opts *socket.BroadcastOptions, clientCountCallback func(uint64), ack func([]any, error)) {
 	packet.Nsp = r.Nsp().Name()
 	onlyLocal := opts.Flags.Local
-	requestId := uuid.New().String()
 	if !onlyLocal {
+		requestId := RequestIdPool.Get()
+		defer RequestIdPool.Put(requestId)
 		rawOpts := socket.BroadcastOptions{
 			Rooms:  opts.Rooms,
 			Except: opts.Except,
@@ -164,7 +164,7 @@ func (r *RedisAdapter) BroadcastWithAck(packet *parser.Packet, opts *socket.Broa
 
 		request := HandMessagePool.Get().(*HandMessage)
 		request.Uid = r.uid
-		request.RequestId = requestId
+		request.RequestId = requestId.(string)
 		request.Type = BROADCAST
 		request.Packet = packet
 		request.Opts = &rawOpts
@@ -205,7 +205,7 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 	localSockets(func(sds []socket.SocketDetails, err error) {
 		lsockets = append(lsockets, sds...)
 	})
-	requestId := uuid.New().String()
+	requestId := RequestIdPool.Get()
 	rawOpts := socket.BroadcastOptions{
 		Rooms:  opts.Rooms,
 		Except: opts.Except,
@@ -213,7 +213,7 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 
 	putRequest := HandMessagePool.Get().(*HandMessage)
 	putRequest.Uid = r.uid
-	putRequest.RequestId = requestId
+	putRequest.RequestId = requestId.(string)
 	putRequest.Type = REMOTE_FETCH
 	putRequest.Opts = &rawOpts
 	return func(f func(sockets []socket.SocketDetails, err error)) {
@@ -226,14 +226,13 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 
 		localRequest.Channal = mesChan
 		r.requests.Store(requestId, localRequest)
-		defer r.requests.Delete(requestId)
+		defer func() {
+			r.requests.Delete(requestId)
+			RequestIdPool.Put(requestId)
+		}()
 
-		b, err := json.Marshal(putRequest.LocalHandMessage)
-		if err != nil {
-			return
-		}
-		err = r.rdb.Publish(r.ctx, r.requestChannel, b).Err()
-		// @review 加入超时,超时后在这里清理 requests
+		err := r.rdb.Publish(r.ctx, r.requestChannel, putRequest.LocalHandMessage).Err()
+
 		sockets := []socket.SocketDetails{}
 		sockets = append(sockets, lsockets...)
 		c, _ := context.WithTimeout(r.ctx, r.requestsTimeout)
@@ -242,6 +241,7 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 			select {
 			case sk, ok := <-mesChan:
 				if !ok {
+					// 关闭说明获取到所有节点的数据
 					flag = true
 					break
 				}
@@ -253,6 +253,7 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 				}
 				sockets = append(sockets, l)
 			case <-c.Done():
+				// 超时不再等待直接反馈
 				flag = true
 			}
 			if flag {
@@ -346,21 +347,14 @@ func (r *RedisAdapter) serverSideEmitWithAck(packet []any) error {
 		return nil
 	}
 
-	requestId := uuid.New().String()
-
+	requestId := RequestIdPool.Get()
+	defer RequestIdPool.Put(requestId)
 	request := HandMessagePool.Get().(*HandMessage)
 	request.Uid = r.uid
-	request.RequestId = requestId
+	request.RequestId = requestId.(string)
 	request.Type = SERVER_SIDE_EMIT
 	request.Data = packet
 	defer HandMessagePool.Put(request)
-
-	// 	storeRequest := r.requests[requestId]
-	// 	if storeRequest != nil {
-	// 		ack(errors.New("timeout reached"), storeRequest.Responses)
-	// 	}
-	// 	delete(r.requests, requestId)
-	// })
 
 	putRequest := HandMessagePool.Get().(*HandMessage)
 	putRequest.Type = SERVER_SIDE_EMIT
@@ -744,11 +738,5 @@ func (r *RedisAdapter) publishResponse(request *HandMessage, response *HandMessa
 	if !r.publishOnSpecificResponseChannel {
 		responseChannel = r.responseChannel
 	}
-
-	b, err := json.Marshal(response.LocalHandMessage)
-	if err != nil {
-		return err
-	}
-	err = r.rdb.Publish(r.ctx, responseChannel, b).Err()
-	return err
+	return r.rdb.Publish(r.ctx, responseChannel, response.LocalHandMessage).Err()
 }
