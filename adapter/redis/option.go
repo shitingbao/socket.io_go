@@ -140,7 +140,7 @@ func NewRedisAdapter(opts ...Option) (*RedisAdapter, error) {
 		Address:           "127.0.0.1:6379",
 		HeartbeatInterval: 5000,
 		HeartbeatTimeout:  10000,
-		RequestsTimeout:   5000,
+		RequestsTimeout:   time.Second * 5,
 	}
 	for _, o := range opts {
 		o(op)
@@ -196,7 +196,7 @@ type LocalHandMessage struct {
 	Uid         string                      `json:"uid"`
 	Sid         socket.SocketId             `json:"sid"`
 	Type        SocketDataType              `json:"type"`
-	RequestId   string                      `json:"request_id"`
+	RequestId   string                      `json:"request_id"` // 请求唯一的id
 	Rooms       []socket.Room               `json:"rooms"`
 	Opts        *socket.BroadcastOptions    `json:"opts"`
 	Close       bool                        `json:"close"`
@@ -204,12 +204,10 @@ type LocalHandMessage struct {
 	SocketIds   *types.Set[socket.SocketId] `json:"socket_ids"`
 	Packet      *parser.Packet              `json:"packet"`
 	ClientCount uint64                      `json:"client_count"`
-
-	TimeoutId string // socket timeout key,use when(delete socket by request id)
-	NumSub    int64  `json:"num_sub"`
-	MsgCount  int64  `json:"msg_count"`
-	Responses []any  `json:"responses"`
-	Data      any    `json:"data"`
+	NumSub      int64                       `json:"num_sub"`
+	MsgCount    int64                       `json:"msg_count"`
+	Responses   []any                       `json:"responses"`
+	Data        any                         `json:"data"`
 }
 
 type AckRequest interface {

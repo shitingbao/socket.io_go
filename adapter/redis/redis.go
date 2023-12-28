@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -225,6 +226,8 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 		localRequest.Channal = mesChan
 		localRequest.Lock = &sync.Mutex{}
 		r.requests.Store(requestId, localRequest)
+		defer r.requests.Delete(requestId)
+
 		b, err := json.Marshal(putRequest.LocalHandMessage)
 		if err != nil {
 			return
@@ -233,18 +236,29 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 		// @review 加入超时,超时后在这里清理 requests
 		sockets := []socket.SocketDetails{}
 		sockets = append(sockets, lsockets...)
-		for sk := range mesChan {
-			l := &localRemoteSocket{
-				id:        sk.Id,
-				handshake: sk.Handshake,
-				rooms:     sk.Rooms,
-				data:      sk.Data,
+		c, _ := context.WithTimeout(r.ctx, r.requestsTimeout)
+		flag := false
+		for {
+			select {
+			case sk, ok := <-mesChan:
+				if !ok {
+					flag = true
+					break
+				}
+				l := &localRemoteSocket{
+					id:        sk.Id,
+					handshake: sk.Handshake,
+					rooms:     sk.Rooms,
+					data:      sk.Data,
+				}
+				sockets = append(sockets, l)
+			case <-c.Done():
+				flag = true
 			}
-			sockets = append(sockets, l)
+			if flag {
+				break
+			}
 		}
-		// r.apply(opts, func(socket *socket.Socket) {
-		// 	sockets = append(sockets, socket)
-		// })
 		f(sockets, err)
 	}
 }
@@ -341,7 +355,6 @@ func (r *RedisAdapter) serverSideEmitWithAck(packet []any) error {
 	request.Data = packet
 	defer HandMessagePool.Put(request)
 
-	// timeoutId := r.task.Set(r.requestsTimeout, func() {
 	// 	storeRequest := r.requests[requestId]
 	// 	if storeRequest != nil {
 	// 		ack(errors.New("timeout reached"), storeRequest.Responses)
@@ -687,13 +700,7 @@ func (r *RedisAdapter) onresponse(channel, msg string) error {
 			request.Channal <- s
 		}
 		if request.MsgCount == request.NumSub { // NumSub is the number of service nodes
-			// r.task.Clear(request.TimeoutId)
-			// @review
-			// if request.Resolve != nil {
-			// 	request.Resolve(request.Sockets)
-			// }
 			close(request.Channal)
-			r.requests.Delete(requestId)
 		}
 	case ALL_ROOMS:
 		request.MsgCount++
@@ -702,7 +709,6 @@ func (r *RedisAdapter) onresponse(channel, msg string) error {
 		}
 		request.Rooms = append(request.Rooms, response.Rooms...)
 		if request.MsgCount == request.NumSub {
-			// r.task.Clear(request.TimeoutId)
 			// @review
 			// if request.Resolve != nil {
 			// 	request.Resolve(request.Rooms)
@@ -713,7 +719,6 @@ func (r *RedisAdapter) onresponse(channel, msg string) error {
 	case REMOTE_JOIN:
 	case REMOTE_LEAVE:
 	case REMOTE_DISCONNECT:
-		// r.task.Clear(request.TimeoutId)
 		// @review
 		// if request.Resolve != nil {
 		// 	request.Resolve()
@@ -722,7 +727,6 @@ func (r *RedisAdapter) onresponse(channel, msg string) error {
 	case SERVER_SIDE_EMIT:
 		request.Responses = append(request.Responses, response.Packet.Data)
 		if int64(len(request.Responses)) == request.NumSub {
-			// r.task.Clear(request.TimeoutId)
 			// @review
 			// if request.Resolve != nil {
 			// 	request.Resolve(request.Responses...)
