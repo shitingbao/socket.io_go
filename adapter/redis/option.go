@@ -178,11 +178,13 @@ type Parser interface {
 	encode(msg any) any
 }
 
-// sync pool
-// @review 加入锁，使用结束和超时自动清理，使用过程中不能被清理
+// HandMessage 处理消息的单位
+// 使用 sync pool 回收
 type HandMessage struct {
 	LocalHandMessage
-	Channal chan RemoteSocket `json:"channal"`
+	Channal   chan RemoteSocket `json:"channal"` // 接受其他节点反馈的内容通道
+	MsgCount  atomic.Int32      `json:"msg_count"`
+	CloseFlag atomic.Int32      `json:"close_flag"` // 关闭 HandMessage channel 的标志
 }
 
 type RemoteSocket struct {
@@ -192,6 +194,7 @@ type RemoteSocket struct {
 	Data      any                     `json:"data"`
 }
 
+// 这一部分是 redis 通道之间传递的信息
 type LocalHandMessage struct {
 	Uid         string                      `json:"uid"`
 	Sid         socket.SocketId             `json:"sid"`
@@ -204,7 +207,6 @@ type LocalHandMessage struct {
 	SocketIds   *types.Set[socket.SocketId] `json:"socket_ids"`
 	Packet      *parser.Packet              `json:"packet"`
 	ClientCount uint64                      `json:"client_count"`
-	MsgCount    atomic.Int32                `json:"msg_count"`
 	Responses   []any                       `json:"responses"`
 	Data        any                         `json:"data"`
 }

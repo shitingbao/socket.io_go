@@ -692,13 +692,15 @@ func (r *RedisAdapter) onresponse(channel, msg string) error {
 	switch request.Type {
 	case SOCKETS:
 	case REMOTE_FETCH:
-		request.MsgCount.Add(1)
 		for _, s := range response.Sockets {
 			request.Channal <- s
 		}
-
+		request.MsgCount.Add(1)
 		if int64(request.MsgCount.Load()) == r.ServerCount() { // NumSub is the number of service nodes
-			close(request.Channal)
+			if request.CloseFlag.CompareAndSwap(0, 1) {
+				// 注意多个节点中，最后两个节点在反馈 socket 时，可能同时结束，注意只有一个 close
+				close(request.Channal)
+			}
 		}
 	case ALL_ROOMS:
 		request.MsgCount.Add(1)
