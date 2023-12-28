@@ -182,7 +182,6 @@ type Parser interface {
 type HandMessage struct {
 	LocalHandMessage
 	Channal chan RemoteSocket `json:"channal"`
-	Lock    sync.Locker
 }
 
 type RemoteSocket struct {
@@ -204,7 +203,6 @@ type LocalHandMessage struct {
 	SocketIds   *types.Set[socket.SocketId] `json:"socket_ids"`
 	Packet      *parser.Packet              `json:"packet"`
 	ClientCount uint64                      `json:"client_count"`
-	NumSub      int64                       `json:"num_sub"`
 	MsgCount    int64                       `json:"msg_count"`
 	Responses   []any                       `json:"responses"`
 	Data        any                         `json:"data"`

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -197,8 +196,8 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 	if opts.Flags.Local {
 		return localSockets
 	}
-	numSub := r.ServerCount()
-	if numSub <= 1 {
+	serverCount := r.ServerCount()
+	if serverCount <= 1 {
 		return localSockets
 	}
 	lsockets := []socket.SocketDetails{}
@@ -221,10 +220,8 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 		mesChan := make(chan RemoteSocket, 1)
 		localRequest := HandMessagePool.Get().(*HandMessage)
 		localRequest.Type = REMOTE_FETCH
-		localRequest.NumSub = numSub
 		localRequest.MsgCount = 1
 		localRequest.Channal = mesChan
-		localRequest.Lock = &sync.Mutex{}
 		r.requests.Store(requestId, localRequest)
 		defer r.requests.Delete(requestId)
 
@@ -364,7 +361,6 @@ func (r *RedisAdapter) serverSideEmitWithAck(packet []any) error {
 
 	putRequest := HandMessagePool.Get().(*HandMessage)
 	putRequest.Type = SERVER_SIDE_EMIT
-	putRequest.NumSub = numSub
 	defer HandMessagePool.Put(putRequest)
 
 	return r.rdb.Publish(r.ctx, r.requestChannel, request).Err()
@@ -686,8 +682,6 @@ func (r *RedisAdapter) onresponse(channel, msg string) error {
 	if !hk {
 		return nil
 	}
-	request.Lock.Lock()
-	defer request.Lock.Unlock()
 	_, ackOk := r.ackRequests.Load(requestId)
 	if requestId == "" || !(ok || ackOk) {
 		return nil
@@ -699,7 +693,7 @@ func (r *RedisAdapter) onresponse(channel, msg string) error {
 		for _, s := range response.Sockets {
 			request.Channal <- s
 		}
-		if request.MsgCount == request.NumSub { // NumSub is the number of service nodes
+		if request.MsgCount == r.ServerCount() { // NumSub is the number of service nodes
 			close(request.Channal)
 		}
 	case ALL_ROOMS:
@@ -708,7 +702,7 @@ func (r *RedisAdapter) onresponse(channel, msg string) error {
 			return nil
 		}
 		request.Rooms = append(request.Rooms, response.Rooms...)
-		if request.MsgCount == request.NumSub {
+		if request.MsgCount == r.ServerCount() {
 			// @review
 			// if request.Resolve != nil {
 			// 	request.Resolve(request.Rooms)
@@ -726,7 +720,7 @@ func (r *RedisAdapter) onresponse(channel, msg string) error {
 		r.requests.Delete(requestId)
 	case SERVER_SIDE_EMIT:
 		request.Responses = append(request.Responses, response.Packet.Data)
-		if int64(len(request.Responses)) == request.NumSub {
+		if int64(len(request.Responses)) == r.ServerCount() {
 			// @review
 			// if request.Resolve != nil {
 			// 	request.Resolve(request.Responses...)
