@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -34,10 +35,14 @@ func (r *RedisAdapter) New(nsp socket.NamespaceInterface) socket.Adapter {
 		r.responseChannel + r.uid + "#"
 
 	r.redisListeners.Store("psub", func(channel, msg string) {
-		r.onmessage(channel, msg)
+		if err := r.onmessage(channel, msg); err != nil {
+			log.Println(err)
+		}
 	})
 	r.redisListeners.Store("sub", func(channel, msg string) {
-		r.onrequest(channel, msg)
+		if err := r.onrequest(channel, msg); err != nil {
+			log.Println(err)
+		}
 	})
 
 	psub := r.rdb.PSubscribe(r.ctx, r.channel+"*") //  r.redisListeners["psub"]
@@ -230,10 +235,18 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 			r.requests.Delete(requestId)
 			RequestIdPool.Put(requestId)
 		}()
-
-		err := r.rdb.Publish(r.ctx, r.requestChannel, putRequest.LocalHandMessage).Err()
-
 		sockets := []socket.SocketDetails{}
+
+		b, err := json.Marshal(putRequest.LocalHandMessage)
+		if err != nil {
+			f(sockets, err)
+			return
+		}
+
+		if err = r.rdb.Publish(r.ctx, r.requestChannel, b).Err(); err != nil {
+			f(sockets, err)
+			return
+		}
 		sockets = append(sockets, lsockets...)
 		c, _ := context.WithTimeout(r.ctx, r.requestsTimeout)
 		flag := false
@@ -738,5 +751,9 @@ func (r *RedisAdapter) publishResponse(request *HandMessage, response *HandMessa
 	if !r.publishOnSpecificResponseChannel {
 		responseChannel = r.responseChannel
 	}
-	return r.rdb.Publish(r.ctx, responseChannel, response.LocalHandMessage).Err()
+	b, err := json.Marshal(response.LocalHandMessage)
+	if err != nil {
+		return err
+	}
+	return r.rdb.Publish(r.ctx, responseChannel, b).Err()
 }

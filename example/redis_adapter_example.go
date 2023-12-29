@@ -89,6 +89,10 @@ func ExampleRedisAdapterNode(address string) {
 			fs := io.FetchSockets()
 			ids := []socket.SocketId{}
 			fs(func(sks []*socket.RemoteSocket, err error) {
+				if err != nil {
+					log.Println(err)
+					return
+				}
 				for _, sck := range sks {
 					log.Println("Handshake=:", sck.Handshake())
 					ids = append(ids, sck.Id())
