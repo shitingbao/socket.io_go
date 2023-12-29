@@ -99,7 +99,7 @@ func (r *RedisAdapter) AddAll(id socket.SocketId, rooms *types.Set[socket.Room])
 		Rooms: rooms,
 	}
 	request.Rooms = rooms.Keys()
-	defer HandMessagePool.Put(request)
+	defer request.Recycle()
 	r.rdb.Publish(r.ctx, r.requestChannel, request)
 }
 
@@ -173,8 +173,7 @@ func (r *RedisAdapter) BroadcastWithAck(packet *parser.Packet, opts *socket.Broa
 		request.Type = BROADCAST
 		request.Packet = packet
 		request.Opts = &rawOpts
-		defer HandMessagePool.Put(request)
-
+		defer request.Recycle()
 		r.rdb.Publish(r.ctx, r.requestChannel, request)
 		req := &ackRequest{
 			clientCountCallbackFun: clientCountCallback,
@@ -222,7 +221,7 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 	putRequest.Type = REMOTE_FETCH
 	putRequest.Opts = &rawOpts
 	return func(f func(sockets []socket.SocketDetails, err error)) {
-		defer HandMessagePool.Put(putRequest)
+		defer putRequest.Recycle()
 		mesChan := make(chan RemoteSocket, 1)
 		localRequest := HandMessagePool.Get().(*HandMessage)
 		localRequest.Type = REMOTE_FETCH
@@ -291,7 +290,7 @@ func (r *RedisAdapter) AddSockets(opts *socket.BroadcastOptions, rooms []socket.
 		Except: opts.Except,
 	}
 	request.Rooms = rooms
-	defer HandMessagePool.Put(request)
+	defer request.Recycle()
 	r.rdb.Publish(r.ctx, r.requestChannel, request)
 }
 
@@ -309,7 +308,7 @@ func (r *RedisAdapter) DelSockets(opts *socket.BroadcastOptions, rooms []socket.
 		Except: opts.Except,
 	}
 	request.Rooms = rooms
-	defer HandMessagePool.Put(request)
+	defer request.Recycle()
 	r.rdb.Publish(r.ctx, r.requestChannel, request)
 }
 
@@ -328,7 +327,7 @@ func (r *RedisAdapter) DisconnectSockets(opts *socket.BroadcastOptions, close bo
 		Except: opts.Except,
 	}
 	request.Close = close
-	defer HandMessagePool.Put(request)
+	defer request.Recycle()
 
 	r.rdb.Publish(r.ctx, r.requestChannel, request)
 }
@@ -345,7 +344,7 @@ func (r *RedisAdapter) ServerSideEmit(packet []any) error {
 	request.Uid = r.uid
 	request.Type = SERVER_SIDE_EMIT
 	request.Data = packet
-	defer HandMessagePool.Put(request)
+	defer request.Recycle()
 	return r.rdb.Publish(r.ctx, r.requestChannel, request).Err()
 }
 
@@ -367,12 +366,11 @@ func (r *RedisAdapter) serverSideEmitWithAck(packet []any) error {
 	request.RequestId = requestId.(string)
 	request.Type = SERVER_SIDE_EMIT
 	request.Data = packet
-	defer HandMessagePool.Put(request)
+	defer request.Recycle()
 
 	putRequest := HandMessagePool.Get().(*HandMessage)
 	putRequest.Type = SERVER_SIDE_EMIT
-	defer HandMessagePool.Put(putRequest)
-
+	defer putRequest.Recycle()
 	return r.rdb.Publish(r.ctx, r.requestChannel, request).Err()
 
 }
@@ -500,7 +498,7 @@ func (r *RedisAdapter) onmessage(channel, msg string) error {
 	return nil
 }
 
-// 收到其他节点请求后的应答
+// 向其他节点发送请求
 func (r *RedisAdapter) onrequest(channel, msg string) error {
 	if strings.HasPrefix(channel, r.responseChannel) {
 		return r.onresponse(channel, msg)
@@ -509,14 +507,13 @@ func (r *RedisAdapter) onrequest(channel, msg string) error {
 		return errors.New("not request channel")
 	}
 	request := HandMessagePool.Get().(*HandMessage)
-	defer HandMessagePool.Put(request)
+	defer request.Recycle()
 	if err := json.Unmarshal([]byte(msg), request); err != nil {
 		return err
 	}
 
 	response := HandMessagePool.Get().(*HandMessage)
-	defer HandMessagePool.Put(response)
-
+	defer response.Recycle()
 	response.RequestId = request.RequestId
 
 	switch request.Type {
@@ -538,7 +535,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) error {
 		return r.publishResponse(request, response)
 	case REMOTE_JOIN:
 		if request.Opts != nil {
-			r.AddSockets(request.Opts, request.Rooms)
+			r.adapter.AddSockets(request.Opts, request.Rooms)
 			return nil
 		}
 		socket, ok := r.nsp.Sockets().Load(request.Sid)
@@ -638,7 +635,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) error {
 			}
 			r.BroadcastWithAck(request.Packet, opt, func(clientCount uint64) {
 				response := HandMessagePool.Get().(*HandMessage)
-				defer HandMessagePool.Put(response)
+				defer response.Recycle()
 				response.Type = BROADCAST_CLIENT_COUNT
 				response.RequestId = request.RequestId
 				response.ClientCount = clientCount
@@ -665,10 +662,10 @@ func (r *RedisAdapter) onrequest(channel, msg string) error {
 	return nil
 }
 
-// 收到自己节点发出请求的应答消息
+// 在 onrequest 发送后 收到自己节点发出请求的应答消息处理
 func (r *RedisAdapter) onresponse(channel, msg string) error {
 	response := HandMessagePool.Get().(*HandMessage)
-	defer HandMessagePool.Put(response)
+	defer response.Recycle()
 	if err := json.Unmarshal([]byte(msg), response); err != nil {
 		return err
 	}

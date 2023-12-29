@@ -137,8 +137,6 @@ type RedisAdapter struct {
 
 	Subs  []*redis.PubSub
 	PSubs []*redis.PubSub
-
-	FetchPipe chan int
 }
 
 func NewRedisAdapter(opts ...Option) (*RedisAdapter, error) {
@@ -234,6 +232,7 @@ func (a *ackRequest) ack(da []any, err error) {
 	a.ackFun(da, err)
 }
 
+// 用于接受远程 socket 对象数据，兼容 interface json
 type localRemoteSocket struct {
 	id        socket.SocketId
 	handshake *socket.Handshake
@@ -255,4 +254,24 @@ func (r *localRemoteSocket) Rooms() *types.Set[socket.Room] {
 
 func (r *localRemoteSocket) Data() any {
 	return r.data
+}
+
+func (h *HandMessage) Recycle() {
+	h.Channal = make(chan RemoteSocket, 1)
+	h.MsgCount = atomic.Int32{}
+	h.CloseFlag = atomic.Int32{}
+	h.Uid = ""
+	h.Sid = ""
+	h.Type = -1
+	h.RequestId = ""
+	h.Rooms = []socket.Room{}
+	h.Opts = &socket.BroadcastOptions{}
+	h.Close = false
+	h.Sockets = []RemoteSocket{}
+	h.SocketIds = &types.Set[socket.SocketId]{}
+	h.Packet = &parser.Packet{}
+	h.ClientCount = 0
+	h.Responses = []any{}
+	h.Data = nil
+	HandMessagePool.Put(h)
 }
