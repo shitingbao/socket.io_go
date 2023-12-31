@@ -570,7 +570,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) error {
 		return r.publishResponse(request, response)
 	case REMOTE_FETCH:
 		if _, ok := r.requests.Load(request.RequestId); ok {
-			return errors.New("local out")
+			return nil
 		}
 		localSockets := r.adapter.FetchSockets(request.Opts)
 		socketFetch := func(sockets []socket.SocketDetails, err error) {

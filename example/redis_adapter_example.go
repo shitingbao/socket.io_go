@@ -84,6 +84,11 @@ func ExampleRedisAdapterNode(address string) {
 				client.Emit("error", "data err")
 				return
 			}
+			// 可以使用 socket id 来加入一个房间
+			// 并不是直接使用了 id 来寻找对应的连接对象
+			// 而是因为这个 socket id 是在连接时就加入了一个以该 id 为 key 的房间，而 id 保证唯一，在这个唯一的房间内只有该连接，然后加入到你对应的房间内
+			// 详细见 socket 对象的 _onconnect 方法
+			io.In(socket.Room(client.Id())).SocketsJoin(socket.Room(das))
 			client.Join(socket.Room(das))
 			// fs := client.Nsp().FetchSockets()
 			fs := io.FetchSockets()
