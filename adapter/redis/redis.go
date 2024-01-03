@@ -100,7 +100,7 @@ func (r *RedisAdapter) AddAll(id socket.SocketId, rooms *types.Set[socket.Room])
 	}
 	request.Rooms = rooms.Keys()
 	defer request.Recycle()
-	r.rdb.Publish(r.ctx, r.requestChannel, request)
+	r.publishRequest(r.requestChannel, request.LocalHandMessage)
 }
 
 // Removes a socket from a room.
@@ -134,17 +134,20 @@ func (r *RedisAdapter) Broadcast(packet *parser.Packet, opts *socket.BroadcastOp
 		onlyLocal = true
 	}
 	if !onlyLocal {
-		rawOpts := socket.BroadcastOptions{
+		rawOpts := &socket.BroadcastOptions{
 			Rooms:  (opts.Rooms),
 			Except: opts.Except,
 			Flags:  opts.Flags,
 		}
-		msg := r.parser.encode([]any{r.uid, packet, rawOpts})
+		msg := &HandMessage{}
+		msg.Uid = r.uid
+		msg.Packet = packet
+		msg.Opts = rawOpts
 		channel := r.channel
 		if opts.Rooms.Len() == 1 {
 			channel += string(opts.Rooms.Keys()[0]) + "#"
 		}
-		r.rdb.Publish(r.ctx, channel, msg)
+		r.publishRequest(channel, msg.LocalHandMessage)
 	}
 	r.adapter.Broadcast(packet, opts)
 }
@@ -174,7 +177,7 @@ func (r *RedisAdapter) BroadcastWithAck(packet *parser.Packet, opts *socket.Broa
 		request.Packet = packet
 		request.Opts = &rawOpts
 		defer request.Recycle()
-		r.rdb.Publish(r.ctx, r.requestChannel, request)
+		r.publishRequest(r.requestChannel, request.LocalHandMessage)
 		req := &ackRequest{
 			clientCountCallbackFun: clientCountCallback,
 			ackFun:                 ack,
@@ -236,13 +239,7 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 		}()
 		sockets := []socket.SocketDetails{}
 
-		b, err := json.Marshal(putRequest.LocalHandMessage)
-		if err != nil {
-			f(sockets, err)
-			return
-		}
-
-		if err = r.rdb.Publish(r.ctx, r.requestChannel, b).Err(); err != nil {
+		if err := r.publishRequest(r.requestChannel, putRequest.LocalHandMessage); err != nil {
 			f(sockets, err)
 			return
 		}
@@ -272,7 +269,7 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 				break
 			}
 		}
-		f(sockets, err)
+		f(sockets, nil)
 	}
 }
 
@@ -291,7 +288,7 @@ func (r *RedisAdapter) AddSockets(opts *socket.BroadcastOptions, rooms []socket.
 	}
 	request.Rooms = rooms
 	defer request.Recycle()
-	r.rdb.Publish(r.ctx, r.requestChannel, request)
+	r.publishRequest(r.requestChannel, request.LocalHandMessage)
 }
 
 // Makes the matching socket instances leave the specified rooms
@@ -309,7 +306,7 @@ func (r *RedisAdapter) DelSockets(opts *socket.BroadcastOptions, rooms []socket.
 	}
 	request.Rooms = rooms
 	defer request.Recycle()
-	r.rdb.Publish(r.ctx, r.requestChannel, request)
+	r.publishRequest(r.requestChannel, request.LocalHandMessage)
 }
 
 // Makes the matching socket instances disconnect
@@ -329,7 +326,7 @@ func (r *RedisAdapter) DisconnectSockets(opts *socket.BroadcastOptions, close bo
 	request.Close = close
 	defer request.Recycle()
 
-	r.rdb.Publish(r.ctx, r.requestChannel, request)
+	r.publishRequest(r.requestChannel, request.LocalHandMessage)
 }
 
 // Send a packet to the other Socket.IO servers in the cluster
@@ -345,7 +342,7 @@ func (r *RedisAdapter) ServerSideEmit(packet []any) error {
 	request.Type = SERVER_SIDE_EMIT
 	request.Data = packet
 	defer request.Recycle()
-	return r.rdb.Publish(r.ctx, r.requestChannel, request).Err()
+	return r.publishRequest(r.requestChannel, request.LocalHandMessage)
 }
 
 func (r *RedisAdapter) serverSideEmitWithAck(packet []any) error {
@@ -371,7 +368,7 @@ func (r *RedisAdapter) serverSideEmitWithAck(packet []any) error {
 	putRequest := HandMessagePool.Get().(*HandMessage)
 	putRequest.Type = SERVER_SIDE_EMIT
 	defer putRequest.Recycle()
-	return r.rdb.Publish(r.ctx, r.requestChannel, request).Err()
+	return r.publishRequest(r.requestChannel, request.LocalHandMessage)
 
 }
 
@@ -753,4 +750,12 @@ func (r *RedisAdapter) publishResponse(request *HandMessage, response *HandMessa
 		return err
 	}
 	return r.rdb.Publish(r.ctx, responseChannel, b).Err()
+}
+
+func (r *RedisAdapter) publishRequest(channel string, mes LocalHandMessage) error {
+	b, err := json.Marshal(mes)
+	if err != nil {
+		return err
+	}
+	return r.rdb.Publish(r.ctx, channel, b).Err()
 }
