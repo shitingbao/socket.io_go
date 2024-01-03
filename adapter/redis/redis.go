@@ -130,7 +130,7 @@ func (r *RedisAdapter) GetBroadcast() func(*parser.Packet, *socket.BroadcastOpti
 func (r *RedisAdapter) Broadcast(packet *parser.Packet, opts *socket.BroadcastOptions) {
 	packet.Nsp = r.Nsp().Name()
 	onlyLocal := false
-	if opts != nil && opts.Flags != nil && opts.Flags.Local {
+	if checkOpt(opts) && opts.Flags != nil && opts.Flags.Local {
 		onlyLocal = true
 	}
 	if !onlyLocal {
@@ -390,7 +390,7 @@ func (r *RedisAdapter) RestoreSession(id socket.PrivateSessionId, pack string) (
 //   - `Rooms` {*types.Set[Room]} list of rooms to broadcast to
 func (r *RedisAdapter) broadcast(packet *parser.Packet, opts *socket.BroadcastOptions) {
 	flags := &socket.BroadcastFlags{}
-	if opts != nil && opts.Flags != nil {
+	if checkOpt(opts) && opts.Flags != nil {
 		flags = opts.Flags
 	}
 
@@ -531,7 +531,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) error {
 		response.Rooms = r.Rooms().Keys()
 		return r.publishResponse(request, response)
 	case REMOTE_JOIN:
-		if request.Opts != nil {
+		if checkOpt(request.Opts) {
 			r.adapter.AddSockets(request.Opts, request.Rooms)
 			return nil
 		}
@@ -542,7 +542,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) error {
 		socket.Join(request.Rooms...)
 		return r.publishResponse(request, response)
 	case REMOTE_LEAVE:
-		if request.Opts != nil {
+		if checkOpt(request.Opts) {
 			r.DelSockets(request.Opts, request.Rooms)
 			return nil
 		}
@@ -555,7 +555,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) error {
 		}
 		return r.publishResponse(request, response)
 	case REMOTE_DISCONNECT:
-		if request.Opts != nil {
+		if checkOpt(request.Opts) {
 			r.DisconnectSockets(request.Opts, request.Close)
 			return nil
 		}
@@ -758,4 +758,17 @@ func (r *RedisAdapter) publishRequest(channel string, mes LocalHandMessage) erro
 		return err
 	}
 	return r.rdb.Publish(r.ctx, channel, b).Err()
+}
+
+func checkOpt(opts *socket.BroadcastOptions) bool {
+	except := true
+	if opts.Except == nil || opts.Except.Len() == 0 {
+		except = false
+	}
+	flags := opts.Flags != nil
+	rooms := true
+	if opts.Rooms == nil || opts.Rooms.Len() == 0 {
+		rooms = false
+	}
+	return except || flags || rooms
 }
