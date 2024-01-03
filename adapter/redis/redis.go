@@ -95,8 +95,11 @@ func (r *RedisAdapter) AddAll(id socket.SocketId, rooms *types.Set[socket.Room])
 	request := HandMessagePool.Get().(*HandMessage)
 	request.Uid = r.uid
 	request.Type = REMOTE_JOIN
+
+	optRooms := types.NewSet[socket.Room]()
+	optRooms.Add(socket.Room(id))
 	request.Opts = &socket.BroadcastOptions{
-		Rooms: rooms,
+		Rooms: optRooms,
 	}
 	request.Rooms = rooms.Keys()
 	defer request.Recycle()
