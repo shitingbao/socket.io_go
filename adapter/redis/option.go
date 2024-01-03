@@ -2,6 +2,8 @@ package redis
 
 import (
 	"context"
+	"encoding/json"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -274,4 +276,98 @@ func (h *HandMessage) Recycle() {
 	h.Responses = []any{}
 	h.Data = nil
 	HandMessagePool.Put(h)
+}
+
+type LocalHandMessageJson struct {
+	Uid       string          `json:"uid"`
+	Sid       socket.SocketId `json:"sid"`
+	Type      SocketDataType  `json:"type"`
+	RequestId string          `json:"request_id"` // 请求唯一的id
+	Rooms     []socket.Room   `json:"rooms"`
+	Opts      struct {
+		Rooms  map[socket.Room]types.Void `json:"rooms,omitempty"`
+		Except map[socket.Room]types.Void `json:"except,omitempty"`
+		Flags  *socket.BroadcastFlags     `json:"flags,omitempty"`
+	} `json:"opts"`
+	Close       bool                           `json:"close"`
+	Sockets     []RemoteSocket                 `json:"sockets"` // bool or []socket.Socket
+	SocketIds   map[socket.SocketId]types.Void `json:"socket_ids"`
+	Packet      *parser.Packet                 `json:"packet"`
+	ClientCount uint64                         `json:"client_count"`
+	Responses   []any                          `json:"responses"`
+	Data        any                            `json:"data"`
+}
+
+func (l LocalHandMessage) MarshalJSON() ([]byte, error) {
+	da := LocalHandMessageJson{}
+	log.Println("MarshalJSON!!!!!!!")
+	da.Uid = l.Uid
+	da.Sid = l.Sid
+	da.Type = l.Type
+	da.RequestId = l.RequestId
+	da.Rooms = l.Rooms
+	da.Opts = struct {
+		Rooms  map[socket.Room]types.Void `json:"rooms,omitempty"`
+		Except map[socket.Room]types.Void `json:"except,omitempty"`
+		Flags  *socket.BroadcastFlags     `json:"flags,omitempty"`
+	}{}
+	da.Opts.Flags = l.Opts.Flags
+
+	if l.Opts != nil && l.Opts.Rooms != nil {
+		da.Opts.Rooms = l.Opts.Rooms.All()
+	}
+	if l.Opts != nil && l.Opts.Except != nil {
+		da.Opts.Except = l.Opts.Except.All()
+	}
+
+	da.Close = l.Close
+	da.Sockets = l.Sockets
+
+	if l.SocketIds != nil {
+		da.SocketIds = l.SocketIds.All()
+	}
+
+	da.Packet = l.Packet
+	da.ClientCount = l.ClientCount
+	da.Responses = l.Responses
+	da.Data = l.Data
+	return json.Marshal(da)
+}
+
+func (h *LocalHandMessage) UnmarshalJSON(data []byte) error {
+	da := LocalHandMessageJson{}
+	if err := json.Unmarshal(data, &da); err != nil {
+		return err
+	}
+	log.Println("UnmarshalJSON!!!!!!!")
+	h.Uid = da.Uid
+	h.Sid = da.Sid
+	h.Type = da.Type
+	h.RequestId = da.RequestId
+	h.Rooms = da.Rooms
+
+	h.Opts = &socket.BroadcastOptions{}
+	h.Opts.Rooms = types.NewSet[socket.Room]()
+	for k := range da.Opts.Rooms {
+		h.Opts.Rooms.Add(k)
+	}
+
+	h.Opts.Except = types.NewSet[socket.Room]()
+	for k := range da.Opts.Except {
+		h.Opts.Except.Add(k)
+	}
+	h.Opts.Flags = da.Opts.Flags
+	h.Close = da.Close
+	h.Sockets = da.Sockets
+
+	h.SocketIds = types.NewSet[socket.SocketId]()
+	for k := range da.SocketIds {
+		h.SocketIds.Add(k)
+	}
+
+	h.Packet = da.Packet
+	h.ClientCount = da.ClientCount
+	h.Responses = da.Responses
+	h.Data = da.Data
+	return nil
 }

@@ -475,8 +475,10 @@ func (r *RedisAdapter) onmessage(channel, msg string) error {
 	if room != "" {
 		return errors.New("room is nil")
 	}
-	args := HandMessage{}
-	if err := json.Unmarshal([]byte(msg), &args); err != nil {
+
+	args := HandMessagePool.Get().(*HandMessage)
+	defer args.Recycle()
+	if err := json.Unmarshal([]byte(msg), args); err != nil {
 		return err
 	}
 	if args.Uid == r.uid {
