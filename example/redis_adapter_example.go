@@ -74,6 +74,14 @@ func ExampleRedisAdapterNode(address string) {
 		rdsAdapter.On("join-room", func(datas ...any) {
 			log.Println("rdsAdapter join-room==:", datas)
 		})
+		client.On("broadcast", func(datas ...any) {
+			room, ok := datas[0].(string)
+			if !ok {
+				client.Emit("error", "data err")
+				return
+			}
+			io.To(socket.Room(room)).Emit("broadcast", "test")
+		})
 		client.On("users", func(datas ...any) {
 			// get all socket
 			room, ok := datas[0].(string)

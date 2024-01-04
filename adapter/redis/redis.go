@@ -146,20 +146,18 @@ func (r *RedisAdapter) Broadcast(packet *parser.Packet, opts *socket.BroadcastOp
 		onlyLocal = true
 	}
 	if !onlyLocal {
-		rawOpts := &socket.BroadcastOptions{
-			Rooms:  (opts.Rooms),
-			Except: opts.Except,
-			Flags:  opts.Flags,
-		}
-		msg := &HandMessage{}
-		msg.Uid = r.uid
-		msg.Packet = packet
-		msg.Opts = rawOpts
+		request := HandMessagePool.Get().(*HandMessage)
+		request.Uid = r.uid
+		request.Type = BROADCAST
+		request.Packet = packet
+		request.Opts = opts
+		defer request.Recycle()
+
 		channel := r.channel
 		if opts.Rooms.Len() == 1 {
 			channel += string(opts.Rooms.Keys()[0]) + "#"
 		}
-		r.publishRequest(channel, msg.LocalHandMessage)
+		r.publishRequest(channel, request.LocalHandMessage)
 	}
 	r.adapter.Broadcast(packet, opts)
 }
