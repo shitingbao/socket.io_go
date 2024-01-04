@@ -9,15 +9,9 @@ import (
 	"github.com/zishang520/socket.io/v2/socket"
 )
 
-// if my system name is redisAdapterTest,
-// you can generate a unique identifier yourself
-// or write it into a configuration file
-// to ensure that nodes in the system can discover each other.
-var serverName = "redisAdapterTest"
-
 func cross(ctx *gin.Context) {
 	// 白名单自定义
-	allowedOrigins := []string{"http://192.168.31.20:3001", "http://192.168.31.20:3000"}
+	allowedOrigins := []string{"http://localhost:3001", "http://localhost:3000"}
 	origin := ctx.Request.Header.Get("Origin")
 	// log.Println("origin=:", origin, " Referer:", ctx.Request.Referer()) origin or Referer
 	for _, allowedOrigin := range allowedOrigins {
