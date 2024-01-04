@@ -92,8 +92,8 @@ func ExampleRedisAdapterNode(address string) {
 			// 并不是直接使用了 id 来寻找对应的连接对象
 			// 而是因为这个 socket id 是在连接时就加入了一个以该 id 为 key 的房间，而 id 保证唯一，在这个唯一的房间内只有该连接，然后加入到你对应的房间内
 			// 详细见 socket 对象的 _onconnect 方法
-			// io.In(socket.Room(client.Id())).SocketsJoin(socket.Room(room))
-			client.Join(socket.Room(room))
+			io.In(socket.Room(client.Id())).SocketsJoin(socket.Room(room))
+			// client.Join(socket.Room(room))
 			// fs := client.Nsp().FetchSockets()
 			fs := io.In(socket.Room(room)).FetchSockets()
 			ids := []socket.SocketId{}
@@ -111,6 +111,30 @@ func ExampleRedisAdapterNode(address string) {
 			client.Emit("join-room", ids)
 		})
 
+		client.On("leave-room", func(datas ...any) {
+			log.Println("leave-room datas:", datas)
+
+			room, ok := datas[0].(string)
+			if !ok {
+				client.Emit("error", "data err")
+				return
+			}
+			io.In(socket.Room(client.Id())).SocketsLeave(socket.Room(room))
+
+			fs := io.In(socket.Room(room)).FetchSockets()
+			ids := []socket.SocketId{}
+			fs(func(sks []*socket.RemoteSocket, err error) {
+				if err != nil {
+					log.Println(err)
+					return
+				}
+				for _, sck := range sks {
+					// log.Println("Handshake=:", sck.Handshake())
+					ids = append(ids, sck.Id())
+				}
+			})
+			log.Println("leave-room:", ids)
+		})
 		client.On("disconnect", func(...any) {
 			log.Println("disconnect")
 		})

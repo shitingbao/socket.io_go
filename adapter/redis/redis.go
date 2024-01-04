@@ -110,6 +110,12 @@ func (r *RedisAdapter) Del(id socket.SocketId, room socket.Room) {
 // Removes a socket from all rooms it's joined.
 func (r *RedisAdapter) DelAll(id socket.SocketId) {
 	r.adapter.DelAll(id)
+	request := HandMessagePool.Get().(*HandMessage)
+	request.Sid = id
+	request.Uid = r.uid
+	request.Type = REMOTE_LEAVE
+	defer request.Recycle()
+	r.publishRequest(r.requestChannel, request.LocalHandMessage)
 }
 
 func (r *RedisAdapter) SetBroadcast(broadcast func(*parser.Packet, *socket.BroadcastOptions)) {
@@ -549,17 +555,24 @@ func (r *RedisAdapter) onrequest(channel, msg string) error {
 		}, request.Rooms)
 		return r.publishResponse(request, response)
 	case REMOTE_LEAVE:
+		// leave 逻辑和 join 逻辑相同
 		if checkOpt(request.Opts) {
-			r.DelSockets(request.Opts, request.Rooms)
+			r.adapter.DelSockets(request.Opts, request.Rooms)
 			return nil
 		}
-		socket, ok := r.nsp.Sockets().Load(request.Sid)
-		if !ok {
+		_, ok := r.nsp.Sockets().Load(request.Sid)
+		if !ok || request.Uid == r.uid {
 			return nil
 		}
-		if len(request.Rooms) > 0 {
-			socket.Leave(request.Rooms[0])
+		leaveRooms := request.Rooms
+		if len(request.Rooms) == 0 {
+			r.Rooms().Range(func(rm socket.Room, sd *types.Set[socket.SocketId]) bool {
+				leaveRooms = append(leaveRooms, rm)
+				return true
+			})
+
 		}
+		r.adapter.DelSockets(request.Opts, leaveRooms)
 		return r.publishResponse(request, response)
 	case REMOTE_DISCONNECT:
 		if checkOpt(request.Opts) {
