@@ -93,14 +93,10 @@ func (r *RedisAdapter) AddAll(id socket.SocketId, rooms *types.Set[socket.Room])
 	r.adapter.AddAll(id, rooms)
 
 	request := HandMessagePool.Get().(*HandMessage)
+	request.Sid = id
 	request.Uid = r.uid
 	request.Type = REMOTE_JOIN
-
-	optRooms := types.NewSet[socket.Room]()
-	optRooms.Add(socket.Room(id))
-	request.Opts = &socket.BroadcastOptions{
-		Rooms: optRooms,
-	}
+	// 因为使用的都是 REMOTE_JOIN 这里不用 opt 来区分，因为用的是 socket id
 	request.Rooms = rooms.Keys()
 	defer request.Recycle()
 	r.publishRequest(r.requestChannel, request.LocalHandMessage)
@@ -536,15 +532,21 @@ func (r *RedisAdapter) onrequest(channel, msg string) error {
 		response.Rooms = r.Rooms().Keys()
 		return r.publishResponse(request, response)
 	case REMOTE_JOIN:
+		// 有 opt 说明是 add socket 方法
 		if checkOpt(request.Opts) {
 			r.adapter.AddSockets(request.Opts, request.Rooms)
 			return nil
 		}
-		socket, ok := r.nsp.Sockets().Load(request.Sid)
-		if !ok {
+		// 没有说明是单个的 socket id add all 方法
+		// 由于自己的节点已经操作过 AddSockets 这里不重复操作，免得循环加入
+		_, ok := r.nsp.Sockets().Load(request.Sid)
+		if !ok || request.Uid == r.uid {
 			return nil
 		}
-		socket.Join(request.Rooms...)
+		// 这里用 socket id 作为房间是因为每个连接 connect 时都有一个自己 socket id 的房间，来兼容房间的模式
+		r.adapter.AddSockets(&socket.BroadcastOptions{
+			Rooms: types.NewSet[socket.Room](socket.Room(request.Sid)),
+		}, request.Rooms)
 		return r.publishResponse(request, response)
 	case REMOTE_LEAVE:
 		if checkOpt(request.Opts) {

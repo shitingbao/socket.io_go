@@ -3,7 +3,6 @@ package redis
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -278,6 +277,8 @@ func (h *HandMessage) Recycle() {
 	HandMessagePool.Put(h)
 }
 
+// type set 无法 json ，这里兼容
+// @review
 type LocalHandMessageJson struct {
 	Uid       string          `json:"uid"`
 	Sid       socket.SocketId `json:"sid"`
@@ -300,7 +301,6 @@ type LocalHandMessageJson struct {
 
 func (l LocalHandMessage) MarshalJSON() ([]byte, error) {
 	da := LocalHandMessageJson{}
-	log.Println("MarshalJSON!!!!!!!")
 	da.Uid = l.Uid
 	da.Sid = l.Sid
 	da.Type = l.Type
@@ -311,7 +311,9 @@ func (l LocalHandMessage) MarshalJSON() ([]byte, error) {
 		Except map[socket.Room]types.Void `json:"except,omitempty"`
 		Flags  *socket.BroadcastFlags     `json:"flags,omitempty"`
 	}{}
-	da.Opts.Flags = l.Opts.Flags
+	if l.Opts != nil {
+		da.Opts.Flags = l.Opts.Flags
+	}
 
 	if l.Opts != nil && l.Opts.Rooms != nil {
 		da.Opts.Rooms = l.Opts.Rooms.All()
@@ -339,7 +341,6 @@ func (h *LocalHandMessage) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &da); err != nil {
 		return err
 	}
-	log.Println("UnmarshalJSON!!!!!!!")
 	h.Uid = da.Uid
 	h.Sid = da.Sid
 	h.Type = da.Type
