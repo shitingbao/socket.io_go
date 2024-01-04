@@ -80,7 +80,27 @@ func ExampleRedisAdapterNode(address string) {
 		rdsAdapter.On("join-room", func(datas ...any) {
 			log.Println("rdsAdapter join-room==:", datas)
 		})
-
+		client.On("users", func(datas ...any) {
+			// get all socket
+			room, ok := datas[0].(string)
+			if !ok {
+				client.Emit("error", "data err")
+				return
+			}
+			fs := io.In(socket.Room(room)).FetchSockets()
+			ids := []socket.SocketId{}
+			fs(func(sks []*socket.RemoteSocket, err error) {
+				if err != nil {
+					log.Println(err)
+					return
+				}
+				for _, sck := range sks {
+					// log.Println("Handshake=:", sck.Handshake())
+					ids = append(ids, sck.Id())
+				}
+			})
+			client.Emit("pong", ids)
+		})
 		client.On("join-room", func(datas ...any) {
 			log.Println("join-room datas:", datas)
 			room, ok := datas[0].(string)
@@ -94,21 +114,7 @@ func ExampleRedisAdapterNode(address string) {
 			// 详细见 socket 对象的 _onconnect 方法
 			io.In(socket.Room(client.Id())).SocketsJoin(socket.Room(room))
 			// client.Join(socket.Room(room))
-			// fs := client.Nsp().FetchSockets()
-			fs := io.In(socket.Room(room)).FetchSockets()
-			ids := []socket.SocketId{}
-			fs(func(sks []*socket.RemoteSocket, err error) {
-				if err != nil {
-					log.Println(err)
-					return
-				}
-				for _, sck := range sks {
-					// log.Println("Handshake=:", sck.Handshake())
-					ids = append(ids, sck.Id())
-				}
-			})
-			log.Println("join-room:", ids)
-			client.Emit("join-room", ids)
+
 		})
 
 		client.On("leave-room", func(datas ...any) {
@@ -120,20 +126,8 @@ func ExampleRedisAdapterNode(address string) {
 				return
 			}
 			io.In(socket.Room(client.Id())).SocketsLeave(socket.Room(room))
-
-			fs := io.In(socket.Room(room)).FetchSockets()
-			ids := []socket.SocketId{}
-			fs(func(sks []*socket.RemoteSocket, err error) {
-				if err != nil {
-					log.Println(err)
-					return
-				}
-				for _, sck := range sks {
-					// log.Println("Handshake=:", sck.Handshake())
-					ids = append(ids, sck.Id())
-				}
-			})
-			log.Println("leave-room:", ids)
+			// or leave room
+			// client.Leave(socket.Room(room))
 		})
 		client.On("disconnect", func(...any) {
 			log.Println("disconnect")

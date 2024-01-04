@@ -105,6 +105,13 @@ func (r *RedisAdapter) AddAll(id socket.SocketId, rooms *types.Set[socket.Room])
 // Removes a socket from a room.
 func (r *RedisAdapter) Del(id socket.SocketId, room socket.Room) {
 	r.adapter.Del(id, room)
+	request := HandMessagePool.Get().(*HandMessage)
+	request.Sid = id
+	request.Uid = r.uid
+	request.Rooms = []socket.Room{room}
+	request.Type = REMOTE_LEAVE
+	defer request.Recycle()
+	r.publishRequest(r.requestChannel, request.LocalHandMessage)
 }
 
 // Removes a socket from all rooms it's joined.
