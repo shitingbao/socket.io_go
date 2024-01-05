@@ -11,7 +11,7 @@ import (
 
 func cross(ctx *gin.Context) {
 	// 白名单自定义
-	allowedOrigins := []string{"http://localhost:3001", "http://localhost:3000"}
+	allowedOrigins := []string{"http://localhost:3002", "http://localhost:3001", "http://localhost:3000"}
 	origin := ctx.Request.Header.Get("Origin")
 	// log.Println("origin=:", origin, " Referer:", ctx.Request.Referer()) origin or Referer
 	for _, allowedOrigin := range allowedOrigins {
@@ -34,6 +34,7 @@ func cross(ctx *gin.Context) {
 
 func ExampleRedisAdapter() {
 	// the node
+	go ExampleRedisAdapterNode(":8002")
 	go ExampleRedisAdapterNode(":8001")
 
 	// the other node
@@ -75,12 +76,15 @@ func ExampleRedisAdapterNode(address string) {
 			log.Println("rdsAdapter join-room==:", datas)
 		})
 		client.On("broadcast", func(datas ...any) {
-			room, ok := datas[0].(string)
+			// datas is [map[event:test message:asdf room:stb]]
+			log.Println("broadcast=:", datas)
+			da, ok := datas[0].(map[string]interface{})
 			if !ok {
 				client.Emit("error", "data err")
 				return
 			}
-			io.To(socket.Room(room)).Emit("broadcast", "test")
+			log.Println("da==:", da["event"], da["message"], da["room"])
+			io.To(socket.Room(da["room"].(string))).Emit("test", da["message"])
 		})
 		client.On("users", func(datas ...any) {
 			// get all socket

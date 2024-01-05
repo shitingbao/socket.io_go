@@ -200,6 +200,7 @@ type RemoteSocket struct {
 
 // 这一部分是 redis 通道之间传递的信息
 type LocalHandMessage struct {
+	// 每个服务节点的唯一 id
 	Uid         string                      `json:"uid"`
 	Sid         socket.SocketId             `json:"sid"`
 	Type        SocketDataType              `json:"type"`

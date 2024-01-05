@@ -25,7 +25,6 @@ func (r *RedisAdapter) New(nsp socket.NamespaceInterface) socket.Adapter {
 	r.rooms = &types.Map[socket.Room, *types.Set[socket.SocketId]]{}
 	r.sids = &types.Map[socket.SocketId, *types.Set[socket.Room]]{}
 	r.encoder = nsp.Server().Encoder()
-	r._broadcast = r.broadcast
 
 	prefix := "socket.io"
 	r.channel = prefix + "#" + nsp.Name() + "#"
@@ -130,6 +129,9 @@ func (r *RedisAdapter) SetBroadcast(broadcast func(*parser.Packet, *socket.Broad
 }
 
 func (r *RedisAdapter) GetBroadcast() func(*parser.Packet, *socket.BroadcastOptions) {
+	if r._broadcast == nil {
+		return r.adapter.GetBroadcast()
+	}
 	return r._broadcast
 }
 
@@ -148,14 +150,13 @@ func (r *RedisAdapter) Broadcast(packet *parser.Packet, opts *socket.BroadcastOp
 	if !onlyLocal {
 		request := HandMessagePool.Get().(*HandMessage)
 		request.Uid = r.uid
-		request.Type = BROADCAST
 		request.Packet = packet
 		request.Opts = opts
 		defer request.Recycle()
 
 		channel := r.channel
 		if opts.Rooms.Len() == 1 {
-			channel += string(opts.Rooms.Keys()[0]) + "#"
+			channel += string(opts.Rooms.Keys()[0]) + "#" // 防止房间名称首位部分重叠，用特殊字符 # 隔开
 		}
 		r.publishRequest(channel, request.LocalHandMessage)
 	}
@@ -392,76 +393,6 @@ func (r *RedisAdapter) RestoreSession(id socket.PrivateSessionId, pack string) (
 	return r.adapter.RestoreSession(id, pack)
 }
 
-// Broadcasts a packet.
-//
-// Options:
-//   - `Flags` {*BroadcastFlags} flags for this packet
-//   - `Except` {*types.Set[Room]} sids that should be excluded
-//   - `Rooms` {*types.Set[Room]} list of rooms to broadcast to
-func (r *RedisAdapter) broadcast(packet *parser.Packet, opts *socket.BroadcastOptions) {
-	flags := &socket.BroadcastFlags{}
-	if checkOpt(opts) && opts.Flags != nil {
-		flags = opts.Flags
-	}
-
-	packetOpts := &socket.WriteOptions{}
-	packetOpts.PreEncoded = true
-	packetOpts.Volatile = flags.Volatile
-	packetOpts.Compress = flags.Compress
-
-	packet.Nsp = r.nsp.Name()
-	encodedPackets := r.encoder.Encode(packet)
-	r.apply(opts, func(socket *socket.Socket) {
-		if notifyOutgoingListeners := socket.NotifyOutgoingListeners(); notifyOutgoingListeners != nil {
-			notifyOutgoingListeners(packet)
-		}
-		socket.Client().WriteToEngine(encodedPackets, packetOpts)
-	})
-}
-
-func (r *RedisAdapter) apply(opts *socket.BroadcastOptions, callback func(*socket.Socket)) {
-	rooms := opts.Rooms
-	except := r.computeExceptSids(opts.Except)
-	if rooms != nil && rooms.Len() > 0 {
-		ids := types.NewSet[socket.SocketId]()
-		for _, room := range rooms.Keys() {
-			if _ids, ok := r.rooms.Load(room); ok {
-				for _, id := range _ids.Keys() {
-					if ids.Has(id) || except.Has(id) {
-						continue
-					}
-					if socket, ok := r.nsp.Sockets().Load(id); ok {
-						callback(socket)
-						ids.Add(id)
-					}
-				}
-			}
-		}
-	} else {
-		r.sids.Range(func(id socket.SocketId, _ *types.Set[socket.Room]) bool {
-			if except.Has(id) {
-				return true
-			}
-			if socket, ok := r.nsp.Sockets().Load(id); ok {
-				callback(socket)
-			}
-			return true
-		})
-	}
-}
-
-func (r *RedisAdapter) computeExceptSids(exceptRooms *types.Set[socket.Room]) *types.Set[socket.SocketId] {
-	exceptSids := types.NewSet[socket.SocketId]()
-	if exceptRooms != nil && exceptRooms.Len() > 0 {
-		for _, room := range exceptRooms.Keys() {
-			if ids, ok := r.rooms.Load(room); ok {
-				exceptSids.Add(ids.Keys()...)
-			}
-		}
-	}
-	return exceptSids
-}
-
 func (r *RedisAdapter) run(listen string, sub *redis.PubSub) {
 	for {
 		mes, err := sub.ReceiveMessage(r.ctx)
@@ -477,32 +408,42 @@ func (r *RedisAdapter) run(listen string, sub *redis.PubSub) {
 	}
 }
 
+// Broadcast 广播使用的通道应答
 func (r *RedisAdapter) onmessage(channel, msg string) error {
 	if !strings.HasPrefix(channel, r.channel) {
-		return errors.New("not channel")
+		return nil
 	}
 	room := channel[len(r.channel):]
-	if room != "" {
-		return errors.New("room is nil")
+	if len(room) < 1 {
+		return nil
 	}
-
+	room = room[:len(room)-1] // 防止房间名称首位部分重叠，用特殊字符 # 隔开，这里需去除
+	rooms := r.adapter.Rooms()
+	_, ok := rooms.Load(socket.Room(room))
+	if room != "" && !ok {
+		// 本地没有该房间不需要处理，注意的是连接本身的 socket id 也算是一个房间
+		return nil
+	}
 	args := HandMessagePool.Get().(*HandMessage)
 	defer args.Recycle()
 	if err := json.Unmarshal([]byte(msg), args); err != nil {
 		return err
 	}
 	if args.Uid == r.uid {
-		return errors.New("sample uid")
+		return nil
+	}
+	if args.Packet == nil {
+		args.Packet = &parser.Packet{
+			Nsp: "/",
+		}
 	}
 	if args.Packet.Nsp == "" {
 		args.Packet.Nsp = "/"
 	}
 	if args.Packet.Nsp != r.nsp.Name() {
-		return errors.New("Nsp Name not sample")
+		return nil
 	}
 
-	args.Opts.Rooms = &types.Set[socket.Room]{}
-	args.Opts.Except = &types.Set[socket.Room]{}
 	r.adapter.Broadcast(args.Packet, args.Opts)
 	return nil
 }
@@ -649,32 +590,29 @@ func (r *RedisAdapter) onrequest(channel, msg string) error {
 		{
 			_, ok := r.ackRequests.Load(request.RequestId)
 			if ok {
+				// 带有 ack 方法的本地广播不在本地执行
 				return nil
 			}
 			opt := &socket.BroadcastOptions{
 				Rooms:  request.Opts.Rooms,
 				Except: request.Opts.Except,
 			}
-			r.BroadcastWithAck(request.Packet, opt, func(clientCount uint64) {
+			r.adapter.BroadcastWithAck(request.Packet, opt, func(clientCount uint64) {
 				response := HandMessagePool.Get().(*HandMessage)
 				defer response.Recycle()
 				response.Type = BROADCAST_CLIENT_COUNT
 				response.RequestId = request.RequestId
 				response.ClientCount = clientCount
-
-				//  struct {
-				// 	Type        SocketDataType
-				// 	RequestId   string
-				// 	ClientCount uint64
-				// }{Type: BROADCAST_CLIENT_COUNT,
-				// 	RequestId:   request.RequestId,
-				// 	ClientCount: clientCount,
-				// }
-
 				r.publishResponse(request, response)
 			}, func(arg []any, err error) {
-				// response.Type = BROADCAST_CLIENT_COUNT
-				// response.Packet = arg
+				response := HandMessagePool.Get().(*HandMessage)
+				defer response.Recycle()
+				response.Type = BROADCAST_ACK
+				response.RequestId = request.RequestId
+				response.Packet = &parser.Packet{
+					Type: parser.ACK,
+					Data: arg,
+				}
 				r.publishResponse(request, response)
 			})
 		}
