@@ -217,21 +217,21 @@ type LocalHandMessage struct {
 }
 
 type AckRequest interface {
-	clientCountCallback(clientCount uint64)
-	ack([]any, error)
+	ClientCountCallback(clientCount uint64)
+	Ack([]any, error)
 }
 
 type ackRequest struct {
-	clientCountCallbackFun func(clientCount uint64)
-	ackFun                 func([]any, error)
+	ClientCountCallbackFun func(clientCount uint64)
+	AckFun                 func([]any, error)
 }
 
-func (a *ackRequest) clientCountCallback(clientCount uint64) {
-	a.clientCountCallbackFun(clientCount)
+func (a *ackRequest) ClientCountCallback(clientCount uint64) {
+	a.ClientCountCallbackFun(clientCount)
 }
 
-func (a *ackRequest) ack(da []any, err error) {
-	a.ackFun(da, err)
+func (a *ackRequest) Ack(da []any, err error) {
+	a.AckFun(da, err)
 }
 
 // 用于接受远程 socket 对象数据，兼容 interface json

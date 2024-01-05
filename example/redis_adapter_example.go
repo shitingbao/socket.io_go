@@ -77,14 +77,17 @@ func ExampleRedisAdapterNode(address string) {
 		})
 		client.On("broadcast", func(datas ...any) {
 			// datas is [map[event:test message:asdf room:stb]]
-			log.Println("broadcast=:", datas)
 			da, ok := datas[0].(map[string]interface{})
 			if !ok {
 				client.Emit("error", "data err")
 				return
 			}
 			log.Println("da==:", da["event"], da["message"], da["room"])
-			io.To(socket.Room(da["room"].(string))).Emit("test", da["message"])
+			// io.To(socket.Room(da["room"].(string))).Emit("test", da["message"])
+			io.To(socket.Room(da["room"].(string))).Emit("test", da["message"], func(msg []any, err error) {
+				log.Println("ack rollback==:", msg, err)
+			})
+
 		})
 		client.On("users", func(datas ...any) {
 			// get all socket

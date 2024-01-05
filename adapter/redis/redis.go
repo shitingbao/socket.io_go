@@ -155,7 +155,7 @@ func (r *RedisAdapter) Broadcast(packet *parser.Packet, opts *socket.BroadcastOp
 		defer request.Recycle()
 
 		channel := r.channel
-		if opts.Rooms.Len() == 1 {
+		if opts.Rooms.Len() >= 1 {
 			channel += string(opts.Rooms.Keys()[0]) + "#" // 防止房间名称首位部分重叠，用特殊字符 # 隔开
 		}
 		r.publishRequest(channel, request.LocalHandMessage)
@@ -171,27 +171,21 @@ func (r *RedisAdapter) Broadcast(packet *parser.Packet, opts *socket.BroadcastOp
 //   - `Rooms` {*types.Set[Room]} list of rooms to broadcast to
 func (r *RedisAdapter) BroadcastWithAck(packet *parser.Packet, opts *socket.BroadcastOptions, clientCountCallback func(uint64), ack func([]any, error)) {
 	packet.Nsp = r.Nsp().Name()
-	onlyLocal := opts.Flags.Local
-	if !onlyLocal {
+	if opts.Flags != nil && !opts.Flags.Local {
 		requestId := RequestIdPool.Get()
 		defer RequestIdPool.Put(requestId)
-		rawOpts := socket.BroadcastOptions{
-			Rooms:  opts.Rooms,
-			Except: opts.Except,
-			Flags:  opts.Flags,
-		}
 
 		request := HandMessagePool.Get().(*HandMessage)
 		request.Uid = r.uid
 		request.RequestId = requestId.(string)
 		request.Type = BROADCAST
 		request.Packet = packet
-		request.Opts = &rawOpts
+		request.Opts = opts
 		defer request.Recycle()
 		r.publishRequest(r.requestChannel, request.LocalHandMessage)
 		req := &ackRequest{
-			clientCountCallbackFun: clientCountCallback,
-			ackFun:                 ack,
+			ClientCountCallbackFun: clientCountCallback,
+			AckFun:                 ack,
 		}
 		r.ackRequests.Store(requestId, req)
 	}
@@ -593,9 +587,10 @@ func (r *RedisAdapter) onrequest(channel, msg string) error {
 				// 带有 ack 方法的本地广播不在本地执行
 				return nil
 			}
-			opt := &socket.BroadcastOptions{
-				Rooms:  request.Opts.Rooms,
-				Except: request.Opts.Except,
+			opt := &socket.BroadcastOptions{}
+			if request.Opts != nil {
+				opt.Rooms = request.Opts.Rooms
+				opt.Except = request.Opts.Except
 			}
 			r.adapter.BroadcastWithAck(request.Packet, opt, func(clientCount uint64) {
 				response := HandMessagePool.Get().(*HandMessage)
@@ -638,9 +633,9 @@ func (r *RedisAdapter) onresponse(channel, msg string) error {
 		}
 		switch response.Type {
 		case BROADCAST_CLIENT_COUNT:
-			ackRequest.clientCountCallback(response.ClientCount)
+			ackRequest.ClientCountCallback(response.ClientCount)
 		case BROADCAST_ACK:
-			ackRequest.ack([]any{response.Packet}, nil)
+			ackRequest.Ack([]any{response.Packet}, nil)
 		}
 		return nil
 	}
