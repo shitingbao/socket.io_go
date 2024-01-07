@@ -23,8 +23,7 @@ func (r *RedisAdapter) New(nsp socket.NamespaceInterface) socket.Adapter {
 	r.nsp = nsp
 	r.adapter = new(socket.AdapterBuilder).New(nsp)
 	r.rooms = &types.Map[socket.Room, *types.Set[socket.SocketId]]{}
-	r.sids = &types.Map[socket.SocketId, *types.Set[socket.Room]]{}
-	r.encoder = nsp.Server().Encoder()
+	// r.sids = &types.Map[socket.SocketId, *types.Set[socket.Room]]{}
 
 	prefix := "socket.io"
 	r.channel = prefix + "#" + nsp.Name() + "#"
