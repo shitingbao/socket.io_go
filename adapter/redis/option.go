@@ -118,8 +118,7 @@ type RedisAdapter struct {
 	adapter socket.Adapter
 	nsp     socket.NamespaceInterface
 	rooms   *types.Map[socket.Room, *types.Set[socket.SocketId]]
-	sids    *types.Map[socket.SocketId, *types.Set[socket.Room]]
-	encoder parser.Encoder
+	// sids    *types.Map[socket.SocketId, *types.Set[socket.Room]]
 
 	_broadcast func(*parser.Packet, *socket.BroadcastOptions)
 
@@ -133,8 +132,6 @@ type RedisAdapter struct {
 	requests                sync.Map
 	ackRequests             sync.Map
 	redisListeners          sync.Map //  map[string](func(channel, msg string))
-	readonly                func()
-	parser                  Parser
 
 	Subs  []*redis.PubSub
 	PSubs []*redis.PubSub
@@ -173,13 +170,7 @@ func NewRedisAdapter(opts ...Option) (*RedisAdapter, error) {
 		requests:       sync.Map{},
 		ackRequests:    sync.Map{}, // make(map[string]AckRequest),
 		redisListeners: sync.Map{}, // make(map[string](func(string, string))),
-		readonly:       func() {},
 	}, nil
-}
-
-type Parser interface {
-	decode(msg any) any
-	encode(msg any) any
 }
 
 // HandMessage 处理消息的单位
