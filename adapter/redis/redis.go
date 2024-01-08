@@ -516,7 +516,7 @@ func (r *RedisAdapter) onrequest(channel, msg string) error {
 		return r.publishResponse(request, response)
 	case REMOTE_DISCONNECT:
 		if checkOpt(request.Opts) {
-			r.DisconnectSockets(request.Opts, request.Close)
+			r.adapter.DisconnectSockets(request.Opts, request.Close)
 			return nil
 		}
 		socket, ok := r.nsp.Sockets().Load(request.Sid)
