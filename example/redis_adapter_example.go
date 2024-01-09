@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/zishang520/socket.io/v2/adapter/redis"
@@ -67,13 +68,6 @@ func ExampleRedisAdapterNode(address string) {
 	io.SetAdapter(rdsAdapter)
 	namespace := io.Of("/", nil)
 
-	namespace.Adapter().On("join-room", func(datas ...any) {
-		log.Println("other node rdsAdapter join-room==:", datas)
-	})
-	namespace.Adapter().On("leave-room", func(datas ...any) {
-		log.Println("other node rdsAdapter leave-room==:", datas)
-	})
-
 	namespace.On("connection", func(clients ...any) {
 		log.Println("connect")
 		client := clients[0].(*socket.Socket)
@@ -83,7 +77,7 @@ func ExampleRedisAdapterNode(address string) {
 		})
 
 		client.On("broadcast", func(datas ...any) {
-			// datas is [map[event:test message:asdf room:stb]]
+			// example datas is [map[event:test message:asdf room:stb]]
 			da, ok := datas[0].(map[string]interface{})
 			if !ok {
 				client.Emit("error", "data err")
@@ -91,13 +85,19 @@ func ExampleRedisAdapterNode(address string) {
 			}
 			log.Println("da==:", da["event"], da["message"], da["room"])
 			// io.To(socket.Room(da["room"].(string))).Emit("test", da["message"])
-			io.To(socket.Room(da["room"].(string))).Emit("test", da["message"], func(msg []any, err error) {
-				log.Println("ack rollback==:", msg, err)
-			})
+			// you can broadcast
+			io.To(socket.Room(da["room"].(string))).Timeout(1000*time.Millisecond).Emit("test", da["message"])
+
+			// or with ack
+			// @review not supported at the moment
+			// io.To(socket.Room(da["room"].(string))).Timeout(1000*time.Millisecond).Emit("test", da["message"], func(msg []any, err error) {
+			// 	log.Println("ack rollback==:", msg, err)
+			// })
 
 		})
 		client.On("users", func(datas ...any) {
 			// get all socket
+			// example datas is room
 			room, ok := datas[0].(string)
 			if !ok {
 				client.Emit("error", "data err")
@@ -118,6 +118,7 @@ func ExampleRedisAdapterNode(address string) {
 			client.Emit("pong", ids)
 		})
 		client.On("join-room", func(datas ...any) {
+			// example datas is room
 			log.Println("join-room datas:", datas)
 			room, ok := datas[0].(string)
 			if !ok {
@@ -134,10 +135,11 @@ func ExampleRedisAdapterNode(address string) {
 			// for details, see the _onconnect method of the socket object
 			io.In(socket.Room(client.Id())).SocketsJoin(socket.Room(room))
 			// client.Join(socket.Room(room))
-
+			// when you join room,can broadcast other room
 		})
 
 		client.On("leave-room", func(datas ...any) {
+			// example datas is room
 			log.Println("leave-room datas:", datas)
 			room, ok := datas[0].(string)
 			if !ok {
