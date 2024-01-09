@@ -122,7 +122,7 @@ type RedisAdapter struct {
 
 	_broadcast func(*parser.Packet, *socket.BroadcastOptions)
 
-	requestsTimeout                  time.Duration // 多节点应答超时时间
+	requestsTimeout                  time.Duration // Multi-node response timeout
 	publishOnSpecificResponseChannel bool
 
 	channel                 string
@@ -173,8 +173,8 @@ func NewRedisAdapter(opts ...Option) (*RedisAdapter, error) {
 	}, nil
 }
 
-// HandMessage 处理消息的单位
-// 使用 sync pool 回收
+// HandMessage message processing unit
+// use sync.pool Recycle
 type HandMessage struct {
 	LocalHandMessage
 	Channal   chan any     `json:"channal"` // 接受其他节点反馈的内容通道 socket 和 data
@@ -189,13 +189,14 @@ type RemoteSocket struct {
 	Data      any                     `json:"data"`
 }
 
-// 这一部分是 redis 通道之间传递的信息
+// this is the redis‘s information passed between channels
 type LocalHandMessage struct {
-	// 每个服务节点的唯一 id
-	Uid         string                      `json:"uid"`
+	// Uid is each service unique id
+	Uid string `json:"uid"`
+	// Sid is socket id
 	Sid         socket.SocketId             `json:"sid"`
 	Type        SocketDataType              `json:"type"`
-	RequestId   string                      `json:"request_id"` // 请求唯一的id
+	RequestId   string                      `json:"request_id"` // every request id
 	Rooms       []socket.Room               `json:"rooms"`
 	Opts        *socket.BroadcastOptions    `json:"opts"`
 	Close       bool                        `json:"close"`
@@ -269,13 +270,13 @@ func (h *HandMessage) Recycle() {
 	HandMessagePool.Put(h)
 }
 
-// type set 无法 json ，这里兼容
+// type set can not json ，temporary processing
 // @review
 type LocalHandMessageJson struct {
 	Uid       string          `json:"uid"`
 	Sid       socket.SocketId `json:"sid"`
 	Type      SocketDataType  `json:"type"`
-	RequestId string          `json:"request_id"` // 请求唯一的id
+	RequestId string          `json:"request_id"`
 	Rooms     []socket.Room   `json:"rooms"`
 	Opts      struct {
 		Rooms  map[socket.Room]types.Void `json:"rooms,omitempty"`

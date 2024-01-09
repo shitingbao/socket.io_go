@@ -94,7 +94,7 @@ func (r *RedisAdapter) AddAll(id socket.SocketId, rooms *types.Set[socket.Room])
 	request.Sid = id
 	request.Uid = r.uid
 	request.Type = REMOTE_JOIN
-	// 因为使用的都是 REMOTE_JOIN 这里不用 opt 来区分，因为用的是 socket id
+	// beacuse use REMOTE_JOIN, use socket id to distinguish, do not use opt to distinguish
 	request.Rooms = rooms.Keys()
 	defer request.Recycle()
 	r.publishRequest(r.requestChannel, request.LocalHandMessage)
@@ -155,7 +155,9 @@ func (r *RedisAdapter) Broadcast(packet *parser.Packet, opts *socket.BroadcastOp
 
 		channel := r.channel
 		if opts.Rooms.Len() >= 1 {
-			channel += string(opts.Rooms.Keys()[0]) + "#" // 防止房间名称首位部分重叠，用特殊字符 # 隔开
+			// To prevent the first part of the room name from overlapping
+			// use the special character # to separate it.
+			channel += string(opts.Rooms.Keys()[0]) + "#"
 		}
 		r.publishRequest(channel, request.LocalHandMessage)
 	}
@@ -255,7 +257,7 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 			select {
 			case m, ok := <-mesChan:
 				if !ok {
-					// 关闭说明获取到所有节点的数据
+					// when close, should get all data
 					flag = true
 					break
 				}
@@ -271,7 +273,7 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 				}
 				sockets = append(sockets, l)
 			case <-c.Done():
-				// 超时不再等待直接反馈
+				// timeout,return
 				flag = true
 			}
 			if flag {
@@ -413,7 +415,7 @@ func (r *RedisAdapter) run(listen string, sub *redis.PubSub) {
 	}
 }
 
-// Broadcast 广播使用的通道应答
+// onmessage this is Channel response used by broadcast
 func (r *RedisAdapter) onmessage(channel, msg string) error {
 	if !strings.HasPrefix(channel, r.channel) {
 		return nil
@@ -422,11 +424,12 @@ func (r *RedisAdapter) onmessage(channel, msg string) error {
 	if len(room) < 1 {
 		return nil
 	}
-	room = room[:len(room)-1] // 防止房间名称首位部分重叠，用特殊字符 # 隔开，这里需去除
+	room = room[:len(room)-1] // to prevent the first part of the room name from overlapping, separate it with the special character #, which needs to be removed here.
 	rooms := r.adapter.Rooms()
 	_, ok := rooms.Load(socket.Room(room))
 	if room != "" && !ok {
-		// 本地没有该房间不需要处理，注意的是连接本身的 socket id 也算是一个房间
+		// If there is no such room locally, no processing is required.
+		// Note that the socket id of the connection itself is also considered a room.
 		return nil
 	}
 	args := HandMessagePool.Get().(*HandMessage)
@@ -453,7 +456,7 @@ func (r *RedisAdapter) onmessage(channel, msg string) error {
 	return nil
 }
 
-// 向其他节点发送请求
+// onrequest other nodes will receive requests here
 func (r *RedisAdapter) onrequest(channel, msg string) error {
 	if strings.HasPrefix(channel, r.responseChannel) {
 		return r.onresponse(channel, msg)
@@ -489,24 +492,24 @@ func (r *RedisAdapter) onrequest(channel, msg string) error {
 		response.Rooms = r.Rooms().Keys()
 		return r.publishResponse(request, response)
 	case REMOTE_JOIN:
-		// 有 opt 说明是 add socket 方法
+		// there is an `opt` description that should be `add socket` method.
 		if checkOpt(request.Opts) {
 			r.adapter.AddSockets(request.Opts, request.Rooms)
 			return nil
 		}
-		// 没有说明是单个的 socket id add all 方法
-		// 由于自己的节点已经操作过 AddSockets 这里不重复操作，免得循环加入
+		// not `opt` description that should be `socket id add all` method.
+		// Since your own node has already operated AddSockets, you will not repeat the operation here to avoid adding in a loop.
 		_, ok := r.nsp.Sockets().Load(request.Sid)
 		if !ok || request.Uid == r.uid {
 			return nil
 		}
-		// 这里用 socket id 作为房间是因为每个连接 connect 时都有一个自己 socket id 的房间，来兼容房间的模式
+		// this use `socket id` as room because each connection has a room named by its own socket id
 		r.adapter.AddSockets(&socket.BroadcastOptions{
 			Rooms: types.NewSet[socket.Room](socket.Room(request.Sid)),
 		}, request.Rooms)
 		return r.publishResponse(request, response)
 	case REMOTE_LEAVE:
-		// leave 逻辑和 join 逻辑相同
+		// the leave's logic is the same as `join`
 		if checkOpt(request.Opts) {
 			r.adapter.DelSockets(request.Opts, request.Rooms)
 			return nil
@@ -593,43 +596,41 @@ func (r *RedisAdapter) onrequest(channel, msg string) error {
 		}
 		return r.rdb.Publish(r.ctx, r.responseChannel, b).Err()
 	case BROADCAST:
-		{
-			_, ok := r.ackRequests.Load(request.RequestId)
-			if ok {
-				// 带有 ack 方法的本地广播不在本地执行
-				return nil
-			}
-			opt := &socket.BroadcastOptions{}
-			if request.Opts != nil {
-				opt.Rooms = request.Opts.Rooms
-				opt.Except = request.Opts.Except
-			}
-			r.adapter.BroadcastWithAck(request.Packet, opt, func(clientCount uint64) {
-				response := HandMessagePool.Get().(*HandMessage)
-				defer response.Recycle()
-				response.Type = BROADCAST_CLIENT_COUNT
-				response.RequestId = request.RequestId
-				response.ClientCount = clientCount
-				r.publishResponse(request, response)
-			}, func(arg []any, err error) {
-				response := HandMessagePool.Get().(*HandMessage)
-				defer response.Recycle()
-				response.Type = BROADCAST_ACK
-				response.RequestId = request.RequestId
-				response.Packet = &parser.Packet{
-					Type: parser.ACK,
-					Data: arg,
-				}
-				r.publishResponse(request, response)
-			})
+		_, ok := r.ackRequests.Load(request.RequestId)
+		if ok {
+			return nil
 		}
+		opt := &socket.BroadcastOptions{}
+		if request.Opts != nil {
+			opt.Rooms = request.Opts.Rooms
+			opt.Except = request.Opts.Except
+		}
+		r.adapter.BroadcastWithAck(request.Packet, opt, func(clientCount uint64) {
+			response := HandMessagePool.Get().(*HandMessage)
+			defer response.Recycle()
+			response.Type = BROADCAST_CLIENT_COUNT
+			response.RequestId = request.RequestId
+			response.ClientCount = clientCount
+			r.publishResponse(request, response)
+		}, func(arg []any, err error) {
+			response := HandMessagePool.Get().(*HandMessage)
+			defer response.Recycle()
+			response.Type = BROADCAST_ACK
+			response.RequestId = request.RequestId
+			response.Packet = &parser.Packet{
+				Type: parser.ACK,
+				Data: arg,
+			}
+			r.publishResponse(request, response)
+		})
 	default:
 		return errors.New("ignoring unknown onrequest type: " + strconv.Itoa(int(request.Type)))
 	}
 	return nil
 }
 
-// 在 onrequest 发送后 收到自己节点发出请求的应答消息处理
+// onresponse
+// after `onrequest` is sent, the response message received from the request sent by the own node is processed.
 func (r *RedisAdapter) onresponse(channel, msg string) error {
 	response := HandMessagePool.Get().(*HandMessage)
 	defer response.Recycle()
@@ -669,7 +670,9 @@ func (r *RedisAdapter) onresponse(channel, msg string) error {
 		request.MsgCount.Add(1)
 		if int64(request.MsgCount.Load()) == r.ServerCount() { // NumSub is the number of service nodes
 			if request.CloseFlag.CompareAndSwap(0, 1) {
-				// 注意多个节点中，最后两个节点在反馈 socket 时，可能同时结束，注意只有一个 close
+				// Note that among multiple nodes,
+				// the last two nodes may end at the same time when feeding back the `socket`
+				// Note that there is only one close
 				close(request.Channal)
 			}
 		}

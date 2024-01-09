@@ -10,7 +10,7 @@ import (
 )
 
 func cross(ctx *gin.Context) {
-	// 白名单自定义
+	// Whitelist customization
 	allowedOrigins := []string{"http://localhost:3002", "http://localhost:3001", "http://localhost:3000"}
 	origin := ctx.Request.Header.Get("Origin")
 	// log.Println("origin=:", origin, " Referer:", ctx.Request.Referer()) origin or Referer
@@ -117,10 +117,14 @@ func ExampleRedisAdapterNode(address string) {
 				client.Emit("error", "data err")
 				return
 			}
-			// 可以使用 socket id 来加入一个房间
-			// 并不是直接使用了 id 来寻找对应的连接对象
-			// 而是因为这个 socket id 是在连接时就加入了一个以该 id 为 key 的房间，而 id 保证唯一，在这个唯一的房间内只有该连接，然后加入到你对应的房间内
-			// 详细见 socket 对象的 _onconnect 方法
+
+			// You can use `socket id` to join a room
+			// The id is not used directly to find the corresponding connection object.
+			// It's because this `socket id` is added to a room with this id as the key when connecting,
+			// and the id is guaranteed to be unique.
+			// There is only this connection in this unique room,
+			// and then it is added to your corresponding room.
+			// for details, see the _onconnect method of the socket object
 			io.In(socket.Room(client.Id())).SocketsJoin(socket.Room(room))
 			// client.Join(socket.Room(room))
 
@@ -128,12 +132,14 @@ func ExampleRedisAdapterNode(address string) {
 
 		client.On("leave-room", func(datas ...any) {
 			log.Println("leave-room datas:", datas)
-
 			room, ok := datas[0].(string)
 			if !ok {
 				client.Emit("error", "data err")
 				return
 			}
+
+			// client.Leave()
+			// or
 			io.In(socket.Room(client.Id())).SocketsLeave(socket.Room(room))
 			// or leave room
 			// client.Leave(socket.Room(room))
