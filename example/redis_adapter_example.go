@@ -65,16 +65,23 @@ func ExampleRedisAdapterNode(address string) {
 		return
 	}
 	io.SetAdapter(rdsAdapter)
-	io.Of("/", nil).On("connection", func(clients ...any) {
+	namespace := io.Of("/", nil)
+
+	namespace.Adapter().On("join-room", func(datas ...any) {
+		log.Println("other node rdsAdapter join-room==:", datas)
+	})
+	namespace.Adapter().On("leave-room", func(datas ...any) {
+		log.Println("other node rdsAdapter leave-room==:", datas)
+	})
+
+	namespace.On("connection", func(clients ...any) {
 		log.Println("connect")
 		client := clients[0].(*socket.Socket)
 		client.On("ping", func(datas ...any) {
 			log.Println("heart")
 			client.Emit("pong", "pong")
 		})
-		rdsAdapter.On("join-room", func(datas ...any) {
-			log.Println("rdsAdapter join-room==:", datas)
-		})
+
 		client.On("broadcast", func(datas ...any) {
 			// datas is [map[event:test message:asdf room:stb]]
 			da, ok := datas[0].(map[string]interface{})
