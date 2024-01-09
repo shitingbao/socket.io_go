@@ -229,7 +229,7 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 	putRequest.Opts = &rawOpts
 	return func(f func(sockets []socket.SocketDetails, err error)) {
 		defer putRequest.Recycle()
-		mesChan := make(chan RemoteSocket, 1)
+		mesChan := make(chan any, 1)
 		localRequest := HandMessagePool.Get().(*HandMessage)
 		localRequest.Type = REMOTE_FETCH
 		localRequest.MsgCount = atomic.Int32{}
@@ -238,6 +238,7 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 		localRequest.Channal = mesChan
 		r.requests.Store(requestId, localRequest)
 		defer func() {
+			localRequest.Recycle()
 			r.requests.Delete(requestId)
 			RequestIdPool.Put(requestId)
 		}()
@@ -252,10 +253,14 @@ func (r *RedisAdapter) FetchSockets(opts *socket.BroadcastOptions) func(func([]s
 		flag := false
 		for {
 			select {
-			case sk, ok := <-mesChan:
+			case m, ok := <-mesChan:
 				if !ok {
 					// 关闭说明获取到所有节点的数据
 					flag = true
+					break
+				}
+				sk, ok := m.(RemoteSocket)
+				if !ok {
 					break
 				}
 				l := &localRemoteSocket{
@@ -335,31 +340,10 @@ func (r *RedisAdapter) DisconnectSockets(opts *socket.BroadcastOptions, close bo
 
 // Send a packet to the other Socket.IO servers in the cluster
 // this is globe packet
+// packet is append([]any{ev}, args...)
+// this adapter does not support the ServerSideEmit() functionality
 func (r *RedisAdapter) ServerSideEmit(packet []any) error {
-	_, ok := packet[len(packet)-1].(func([]any))
-	if ok {
-		return r.serverSideEmitWithAck(packet)
-	}
-
-	request := HandMessagePool.Get().(*HandMessage)
-	request.Uid = r.uid
-	request.Type = SERVER_SIDE_EMIT
-	request.Data = packet
-	defer request.Recycle()
-	return r.publishRequest(r.requestChannel, request.LocalHandMessage)
-}
-
-func (r *RedisAdapter) serverSideEmitWithAck(packet []any) error {
-	ack, ok := packet[len(packet)-1].(func(...any))
-	if !ok {
-		return errors.New("packet func err")
-	}
-	numSub := r.ServerCount() - 1
-	if numSub <= 0 {
-		ack(nil)
-		return nil
-	}
-
+	ack, ok := packet[len(packet)-1].(func(args []any, err error))
 	requestId := RequestIdPool.Get()
 	defer RequestIdPool.Put(requestId)
 	request := HandMessagePool.Get().(*HandMessage)
@@ -368,10 +352,38 @@ func (r *RedisAdapter) serverSideEmitWithAck(packet []any) error {
 	request.Type = SERVER_SIDE_EMIT
 	request.Data = packet
 	defer request.Recycle()
-
-	putRequest := HandMessagePool.Get().(*HandMessage)
-	putRequest.Type = SERVER_SIDE_EMIT
-	defer putRequest.Recycle()
+	if ok {
+		numSub := r.ServerCount() - 1
+		if numSub <= 0 {
+			ack(nil, nil)
+			return nil
+		}
+		mesChan := make(chan any, 1)
+		request.Channal = mesChan
+		r.requests.Store(requestId, request)
+		defer func() {
+			r.requests.Delete(requestId)
+			RequestIdPool.Put(requestId)
+		}()
+		r.publishRequest(r.requestChannel, request.LocalHandMessage)
+		c, _ := context.WithTimeout(r.ctx, r.requestsTimeout)
+		flag := false
+		for {
+			select {
+			case m, ok := <-mesChan:
+				if !ok {
+					flag = true
+					break
+				}
+				ack([]any{m}, nil)
+			case <-c.Done():
+				flag = true
+			}
+			if flag {
+				break
+			}
+		}
+	}
 	return r.publishRequest(r.requestChannel, request.LocalHandMessage)
 
 }
@@ -546,39 +558,40 @@ func (r *RedisAdapter) onrequest(channel, msg string) error {
 		if request.Uid == r.uid {
 			return nil
 		}
-		// withAck := request.RequestId
-		// if withAck != "" {
-		// 	// r.nsp.EmitUntyped()
-		// }
-		// if (request.uid === this.uid) {
-		//   debug("ignore same uid");
-		//   return;
-		// }
-		// const withAck = request.requestId !== undefined;
-		// if (!withAck) {
-		//   this.nsp._onServerSideEmit(request.data);
-		//   return;
-		// }
-		// let called = false;
-		// const callback = (arg) => {
-		//   // only one argument is expected
-		//   if (called) {
-		//     return;
-		//   }
-		//   called = true;
-		//   debug("calling acknowledgement with %j", arg);
-		//   this.pubClient.publish(
-		//     this.responseChannel,
-		//     JSON.stringify({
-		//       type: RequestType.SERVER_SIDE_EMIT,
-		//       requestId: request.requestId,
-		//       data: arg,
-		//     })
-		//   );
-		// };
-		// request.data.push(callback);
-		// this.nsp._onServerSideEmit(request.data);
-		// break;
+		withAck := request.RequestId
+		if withAck != "" {
+			return r.adapter.ServerSideEmit([]any{request.Data})
+		}
+		if request.Uid == r.uid {
+			return nil
+		}
+		res, ok := request.Data.([]any)
+		if !ok || len(res) < 1 {
+			return nil
+		}
+		env, ok := res[0].(string)
+		if !ok {
+			return nil
+		}
+		resAck := r.nsp.ServerSideEmitWithAck(env, res[1:]...)
+
+		var argData []any
+		var resErr error
+		resAck(func(arg []any, err error) {
+			argData = arg
+			resErr = err
+		})
+		if resErr != nil {
+			return resErr
+		}
+		response.Type = SERVER_SIDE_EMIT
+		response.RequestId = request.RequestId
+		response.Data = argData
+		b, err := json.Marshal(response.LocalHandMessage)
+		if err != nil {
+			return err
+		}
+		return r.rdb.Publish(r.ctx, r.responseChannel, b).Err()
 	case BROADCAST:
 		{
 			_, ok := r.ackRequests.Load(request.RequestId)
@@ -677,20 +690,9 @@ func (r *RedisAdapter) onresponse(channel, msg string) error {
 	case REMOTE_JOIN:
 	case REMOTE_LEAVE:
 	case REMOTE_DISCONNECT:
-		// @review
-		// if request.Resolve != nil {
-		// 	request.Resolve()
-		// }
 		r.requests.Delete(requestId)
 	case SERVER_SIDE_EMIT:
-		request.Responses = append(request.Responses, response.Packet.Data)
-		if int64(len(request.Responses)) == r.ServerCount() {
-			// @review
-			// if request.Resolve != nil {
-			// 	request.Resolve(request.Responses...)
-			// }
-			r.requests.Delete(requestId)
-		}
+		request.Channal <- response.Data
 	default:
 		return errors.New("ignoring unknown onresponse type: " + strconv.Itoa(int(request.Type)))
 	}

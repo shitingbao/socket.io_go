@@ -177,9 +177,9 @@ func NewRedisAdapter(opts ...Option) (*RedisAdapter, error) {
 // 使用 sync pool 回收
 type HandMessage struct {
 	LocalHandMessage
-	Channal   chan RemoteSocket `json:"channal"` // 接受其他节点反馈的内容通道
-	MsgCount  atomic.Int32      `json:"msg_count"`
-	CloseFlag atomic.Int32      `json:"close_flag"` // 关闭 HandMessage channel 的标志
+	Channal   chan any     `json:"channal"` // 接受其他节点反馈的内容通道 socket 和 data
+	MsgCount  atomic.Int32 `json:"msg_count"`
+	CloseFlag atomic.Int32 `json:"close_flag"` // 关闭 HandMessage channel 的标志
 }
 
 type RemoteSocket struct {
@@ -250,7 +250,7 @@ func (r *localRemoteSocket) Data() any {
 }
 
 func (h *HandMessage) Recycle() {
-	h.Channal = make(chan RemoteSocket, 1)
+	h.Channal = make(chan any, 1)
 	h.MsgCount = atomic.Int32{}
 	h.CloseFlag = atomic.Int32{}
 	h.Uid = ""
