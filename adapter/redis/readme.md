@@ -8,11 +8,7 @@ see from [socket.io-redis-adapter](https://github.com/socketio/socket.io-redis-a
 1.2 And Multi-node layout uses nginx.see https://socket.io/zh-CN/docs/v4/reverse-proxy/#nginx or see nginx_config_test file;  
 This is just a simple example. For specific situations, you need to add logic to your project yourself.
 
-## 2.task
-
-use min heap to time defer function
-order desc by time mill
 
 # error
 
-`_onpacket` function no ack function reback
+`_onpacket` function no ack function reback in cluder node in the cluster
