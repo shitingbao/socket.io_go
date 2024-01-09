@@ -183,12 +183,14 @@ func (r *RedisAdapter) BroadcastWithAck(packet *parser.Packet, opts *socket.Broa
 		request.Packet = packet
 		request.Opts = opts
 		defer request.Recycle()
-		r.publishRequest(r.requestChannel, request.LocalHandMessage)
+
 		req := &ackRequest{
 			ClientCountCallbackFun: clientCountCallback,
 			AckFun:                 ack,
 		}
 		r.ackRequests.Store(requestId, req)
+		// @review store ack ,when response to get ack and execute it in response
+		r.publishRequest(r.requestChannel, request.LocalHandMessage)
 	}
 
 	r.adapter.BroadcastWithAck(packet, opts, clientCountCallback, ack)
