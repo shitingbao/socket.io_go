@@ -9,10 +9,10 @@ import (
 
 	"github.com/pborman/uuid"
 	"github.com/redis/go-redis/v9"
+	"github.com/shitingbao/socket.io_go/socket"
 	"github.com/zishang520/engine.io/events"
 	"github.com/zishang520/engine.io/types"
 	"github.com/zishang520/socket.io-go-parser/parser"
-	"github.com/zishang520/socket.io/v2/socket"
 )
 
 const (

@@ -4,7 +4,7 @@ import (
 	"log"
 
 	"github.com/gin-gonic/gin"
-	"github.com/zishang520/socket.io/v2/socket"
+	"github.com/shitingbao/socket.io_go/socket"
 )
 
 func ExampleGinSocket() {

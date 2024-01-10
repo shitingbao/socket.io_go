@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/zishang520/socket.io/v2/adapter/redis"
-	"github.com/zishang520/socket.io/v2/socket"
+	"github.com/shitingbao/socket.io_go/adapter/redis"
+	"github.com/shitingbao/socket.io_go/socket"
 )
 
 func cross(ctx *gin.Context) {
